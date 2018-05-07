@@ -57,6 +57,7 @@
 #include "lua/pickle.h"
 #include "lua/fio.h"
 #include "lua/httpc.h"
+#include "lua/merger.h"
 #include "lua/utf8.h"
 #include "digest.h"
 #include <small/ibuf.h>
@@ -89,6 +90,7 @@ extern char strict_lua[],
 	errno_lua[],
 	fiber_lua[],
 	httpc_lua[],
+	merger_lua[],
 	log_lua[],
 	uri_lua[],
 	socket_lua[],
@@ -146,6 +148,7 @@ static const char *lua_modules[] = {
 	"internal.trigger", trigger_lua,
 	"pwd", pwd_lua,
 	"http.client", httpc_lua,
+	"merger", merger_lua,
 	"iconv", iconv_lua,
 	/* jit.* library */
 	"jit.vmdef", vmdef_lua,
@@ -423,6 +426,8 @@ tarantool_lua_init(const char *tarantool_bin, int argc, char **argv)
 	tarantool_lua_pickle_init(L);
 	tarantool_lua_digest_init(L);
 	luaopen_http_client_driver(L);
+	lua_pop(L, 1);
+	luaopen_merger(L);
 	lua_pop(L, 1);
 	luaopen_msgpack(L);
 	lua_pop(L, 1);
