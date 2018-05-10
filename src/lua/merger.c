@@ -50,6 +50,18 @@
 #include "say.h"
 #endif /* !defined(NDEBUG) */
 
+#include "diag.h"
+
+/**
+ * Helper macro to throw the out of memory error to Lua.
+ */
+#define throw_out_of_memory_error(L, size, what_name) do {	\
+	diag_set(OutOfMemory, (size), "malloc", (what_name));	\
+	luaT_error(L);						\
+	unreachable();						\
+	return -1;						\
+} while(0)
+
 struct source {
 	struct heap_node hnode;
 	struct ibuf *buf;
@@ -148,10 +160,10 @@ lbox_merger_start(struct lua_State *L)
 	free_sources(merger);
 
 	merger->capacity = 8;
-	merger->sources = (struct source **) malloc(merger->capacity *
-						    sizeof(struct source *));
+	const ssize_t sources_size = merger->capacity * sizeof(struct source *);
+	merger->sources = (struct source **) malloc(sources_size);
 	if (merger->sources == NULL)
-		return luaL_error(L, "Can't alloc sources buffer");
+		throw_out_of_memory_error(L, sources_size, "merger->sources");
 	/* Fetch all sources */
 	while (true) {
 		lua_pushinteger(L, merger->count + 1);
@@ -166,14 +178,14 @@ lbox_merger_start(struct lua_State *L)
 		if (merger->count == merger->capacity) {
 			merger->capacity *= 2;
 			struct source **new_sources;
-			new_sources =
-				(struct source **) realloc(merger->sources,
-					merger->capacity *
-					sizeof(struct source *));
+			const ssize_t new_sources_size =
+				merger->capacity * sizeof(struct source *);
+			new_sources = (struct source **) realloc(
+				merger->sources, new_sources_size);
 			if (new_sources == NULL) {
 				free_sources(merger);
-				return luaL_error(
-					L, "Can't alloc sources buffer");
+				throw_out_of_memory_error(L, new_sources_size,
+							  "new_sources");
 			}
 			merger->sources = new_sources;
 		}
@@ -181,7 +193,8 @@ lbox_merger_start(struct lua_State *L)
 			(struct source *) malloc(sizeof(struct source));
 		if (merger->sources[merger->count] == NULL) {
 			free_sources(merger);
-			return luaL_error(L, "Can't alloc merge source");
+			throw_out_of_memory_error(L, sizeof(struct source),
+						  "source");
 		}
 
 		if (mp_typeof(*buf->rpos) != MP_MAP ||
@@ -253,13 +266,15 @@ lbox_merger_new(struct lua_State *L)
 	uint16_t count = 0, capacity = 8;
 	uint32_t *fieldno = NULL;
 	enum field_type *type = NULL;
-	fieldno = (uint32_t *) malloc(sizeof(*fieldno) * capacity);
+	const size_t fieldno_size = sizeof(*fieldno) * capacity;
+	fieldno = (uint32_t *) malloc(fieldno_size);
 	if (fieldno == NULL)
-		return luaL_error(L, "Can not alloc fieldno buffer");
-	type = (enum field_type *) malloc(sizeof(*type) * capacity);
+		throw_out_of_memory_error(L, fieldno_size, "fieldno");
+	const size_t type_size = sizeof(*type) * capacity;
+	type = (enum field_type *) malloc(type_size);
 	if (type == NULL) {
 		free(fieldno);
-		return luaL_error(L, "Can not alloc type buffer");
+		throw_out_of_memory_error(L, type_size, "type");
 	}
 	while (true) {
 		lua_pushinteger(L, count + 1);
@@ -269,22 +284,21 @@ lbox_merger_new(struct lua_State *L)
 		if (count == capacity) {
 			capacity *= 2;
 			uint32_t *old_fieldno = fieldno;
-			fieldno = (uint32_t *) realloc(
-				fieldno, sizeof(*fieldno) * capacity);
+			const size_t fieldno_size = sizeof(*fieldno) * capacity;
+			fieldno = (uint32_t *) realloc(fieldno, fieldno_size);
 			if (fieldno == NULL) {
 				free(old_fieldno);
 				free(type);
-				return luaL_error(
-					L, "Can not alloc fieldno buffer");
+				throw_out_of_memory_error(L, fieldno_size,
+							  "fieldno");
 			}
 			enum field_type *old_type = type;
-			type = (enum field_type *) realloc(
-				type, sizeof(*type) * capacity);
+			const size_t type_size = sizeof(*type) * capacity;
+			type = (enum field_type *) realloc(type, type_size);
 			if (type == NULL) {
 				free(fieldno);
 				free(old_type);
-				return luaL_error(
-					L, "Can not alloc type buffer");
+				throw_out_of_memory_error(L, type_size, "type");
 			}
 		}
 		lua_pushstring(L, "fieldno");
@@ -306,13 +320,14 @@ lbox_merger_new(struct lua_State *L)
 	if (merger == NULL) {
 		free(fieldno);
 		free(type);
-		return luaL_error(L, "Can not alloc merger");
+		throw_out_of_memory_error(L, sizeof(*merger), "merger");
 	}
 	merger->key_def = box_key_def_new(fieldno, type, count);
 	if (merger->key_def == NULL) {
 		free(fieldno);
 		free(type);
-		return luaL_error(L, "Can not alloc key_def");
+		throw_out_of_memory_error(L, sizeof(*merger->key_def),
+					  "merger->key_def");
 	}
 	free(fieldno);
 	free(type);
@@ -321,7 +336,8 @@ lbox_merger_new(struct lua_State *L)
 	if (merger->format == NULL) {
 		box_key_def_delete(merger->key_def);
 		free(merger);
-		return luaL_error(L, "Can not create tuple format");
+		throw_out_of_memory_error(L, sizeof(*merger->format),
+					  "merger->format");
 	}
 
 	*(struct merger **) luaL_pushcdata(L, merger_type_id) = merger;
