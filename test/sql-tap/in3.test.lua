@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(27)
+test:plan(26)
 
 --!./tcltestrunner.lua
 -- 2007 November 29
@@ -58,7 +58,7 @@ end
 test:do_execsql_test(
     "in3-1.1",
     [[
-        CREATE TABLE t1(a PRIMARY KEY, b);
+        CREATE TABLE t1(a  INT PRIMARY KEY, b INT );
         INSERT INTO t1 VALUES(1, 2);
         INSERT INTO t1 VALUES(3, 4);
         INSERT INTO t1 VALUES(5, 6);
@@ -271,18 +271,18 @@ test:do_test(
             DROP TABLE IF EXISTS t1;
             DROP TABLE IF EXISTS t1;
 
-            CREATE TABLE t1(id primary key, a BLOB, b NUMBER ,c TEXT);
+            CREATE TABLE t1(id  INT primary key, a BLOB, b NUMERIC ,c TEXT);
             CREATE UNIQUE INDEX t1_i1 ON t1(a);        /* no affinity */
             CREATE UNIQUE INDEX t1_i2 ON t1(b);        /* numeric affinity */
             CREATE UNIQUE INDEX t1_i3 ON t1(c);        /* text affinity */
 
-            CREATE TABLE t2(id primary key, x BLOB, y NUMBER, z TEXT);
+            CREATE TABLE t2(id  INT primary key, x BLOB, y NUMERIC, z TEXT);
             CREATE UNIQUE INDEX t2_i1 ON t2(x);        /* no affinity */
             CREATE UNIQUE INDEX t2_i2 ON t2(y);        /* numeric affinity */
             CREATE UNIQUE INDEX t2_i3 ON t2(z);        /* text affinity */
 
-            INSERT INTO t1 VALUES(1, 1, 1, 1);
-            INSERT INTO t2 VALUES(1, '1', '1', '1');
+            INSERT INTO t1 VALUES(1, '1', 1, '1');
+            INSERT INTO t2 VALUES(1, '1', 1, '1');
         ]]
     end, {
         -- <in3-3.1>
@@ -298,7 +298,7 @@ test:do_test(
         return exec_neph(" SELECT x IN (SELECT a FROM t1) FROM t2 ")
     end, {
         -- <in3-3.2>
-        0, 0
+        0, 1
         -- </in3-3.2>
     })
 
@@ -314,7 +314,7 @@ test:do_test(
         -- </in3-3.3>
     })
 
-test:do_test(
+--[[test:do_test(
     "in3-3.4",
     function()
         -- No affinity is applied before the comparison takes place. Making
@@ -324,7 +324,7 @@ test:do_test(
         -- <in3-3.4>
         0, 1
         -- </in3-3.4>
-    })
+    })]]
 
 test:do_test(
     "in3-3.5",
@@ -370,7 +370,7 @@ test:do_test(
     "in3-4.1",
     function()
         test:execsql [[
-            CREATE TABLE t3(a PRIMARY KEY, b, c);
+            CREATE TABLE t3(a  INT PRIMARY KEY, b TEXT , c INT );
             CREATE UNIQUE INDEX t3_i ON t3(b, a);
         ]]
         return test:execsql [[
@@ -388,7 +388,7 @@ test:do_test(
 test:do_test(
     "in3-4.2",
     function()
-        return exec_neph(" SELECT 'text' IN (SELECT b FROM t3) ")
+        return exec_neph(" SELECT 'text' IN (SELECT b FROM t3)")
     end, {
         -- <in3-4.2>
         0, 1

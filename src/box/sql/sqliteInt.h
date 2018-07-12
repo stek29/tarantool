@@ -291,6 +291,8 @@ void sqlite3Coverage(int);
  */
 #define IS_BIG_INT(X)  (((X)&~(i64)0xffffffff)!=0)
 
+#define SQLITE_LIKE_DOESNT_MATCH_BLOBS
+
 #include "hash.h"
 #include "parse.h"
 #include <stdio.h>
@@ -1619,6 +1621,10 @@ struct sqlite3 {
 #define SQLITE_MAGIC_BUSY     0xf03b7906	/* Database currently in use */
 #define SQLITE_MAGIC_ERROR    0xb5357930	/* An SQLITE_MISUSE error occurred */
 #define SQLITE_MAGIC_ZOMBIE   0x64cffc7f	/* Close with last statement close */
+
+struct type_def {
+	enum affinity_type type;
+};
 
 /*
  * Each SQL function is defined by an instance of the following
@@ -3323,7 +3329,7 @@ struct index *
 sql_table_primary_key(const struct Table *tab);
 
 void sqlite3StartTable(Parse *, Token *, int);
-void sqlite3AddColumn(Parse *, Token *, Token *);
+void sqlite3AddColumn(Parse *, Token *, struct type_def *);
 
 /**
  * This routine is called by the parser while in the middle of
@@ -3406,6 +3412,13 @@ void
 sql_create_view(struct Parse *parse_context, struct Token *begin,
 		struct Token *name, struct ExprList *aliases,
 		struct Select *select, bool if_exists);
+
+/**
+ * Helper to convert SQLite affinity to corresponding
+ * Tarantool field type.
+ **/
+enum field_type
+sql_affinity_to_field_type(enum affinity_type affinity);
 
 /**
  * Compile view, i.e. create struct Select from
@@ -4215,7 +4228,14 @@ sql_space_index_affinity_str(struct sqlite3 *db, struct space_def *space_def,
 void
 sql_emit_table_affinity(struct Vdbe *v, struct space_def *def, int reg);
 
-char sqlite3CompareAffinity(Expr * pExpr, char aff2);
+/**
+ * Return superposition of two affinities.
+ * This may be required for determining resulting
+ * affinity of expressions like a + '2'.
+ */
+enum affinity_type
+sql_affinity_result(enum affinity_type aff1, enum affinity_type aff2);
+
 int sqlite3IndexAffinityOk(Expr * pExpr, char idx_affinity);
 
 /**
@@ -4723,7 +4743,8 @@ void sqlite3EndBenignMalloc(void);
 #define IN_INDEX_NOOP_OK     0x0001	/* OK to return IN_INDEX_NOOP */
 #define IN_INDEX_MEMBERSHIP  0x0002	/* IN operator used for membership test */
 #define IN_INDEX_LOOP        0x0004	/* IN operator used as a loop */
-int sqlite3FindInIndex(Parse *, Expr *, u32, int *, int *, int *);
+int sqlite3FindInIndex(Parse *, Expr *, u32, int *, int *, int *,
+		       struct index_def **);
 
 void sqlite3ExprSetHeightAndFlags(Parse * pParse, Expr * p);
 #if SQLITE_MAX_EXPR_DEPTH>0
