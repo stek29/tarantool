@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(3021)
+test:plan(2965)
 
 --!./tcltestrunner.lua
 -- 2008 December 11
@@ -7462,6 +7462,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r > 9.22337303685477580800e+18 ORDER BY a DESC",
     {})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.65.gt.3",
     "SELECT a FROM t1 WHERE r > 9.22337303685477580800e+18 ORDER BY r",
@@ -7471,6 +7472,7 @@ test:do_execsql_test(
     "boundary2-2.65.gt.4",
     "SELECT a FROM t1 WHERE r > 9.22337303685477580800e+18 ORDER BY r DESC",
     {})
+end
 
 test:do_execsql_test(
     "boundary2-2.65.gt.5",
@@ -7487,6 +7489,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r >= 9.22337303685477580800e+18 ORDER BY a DESC",
     {})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.65.ge.3",
     "SELECT a FROM t1 WHERE r >= 9.22337303685477580800e+18 ORDER BY r",
@@ -7496,6 +7499,7 @@ test:do_execsql_test(
     "boundary2-2.65.ge.4",
     "SELECT a FROM t1 WHERE r >= 9.22337303685477580800e+18 ORDER BY r DESC",
     {})
+end
 
 test:do_execsql_test(
     "boundary2-2.65.ge.5",
@@ -7512,6 +7516,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r < 9.22337303685477580800e+18 ORDER BY a DESC",
     {64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.65.lt.3",
     "SELECT a FROM t1 WHERE r < 9.22337303685477580800e+18 ORDER BY r",
@@ -7521,6 +7526,7 @@ test:do_execsql_test(
     "boundary2-2.65.lt.4",
     "SELECT a FROM t1 WHERE r < 9.22337303685477580800e+18 ORDER BY r DESC",
     {3, 28, 17, 45, 27, 43, 13, 26, 10, 34, 25, 56, 7, 19, 57, 35, 46, 22, 39, 36, 14, 51, 20, 40, 12, 6, 9, 24, 18, 42, 15, 62, 48, 50, 23, 16, 8, 61, 30, 49, 4, 31, 5, 41, 60, 59, 38, 33, 52, 53, 54, 32, 29, 37, 1, 11, 47, 63, 58, 44, 21, 64, 2, 55})
+end
 
 test:do_execsql_test(
     "boundary2-2.65.lt.5",
@@ -7537,6 +7543,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r <= 9.22337303685477580800e+18 ORDER BY a DESC",
     {64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.65.le.3",
     "SELECT a FROM t1 WHERE r <= 9.22337303685477580800e+18 ORDER BY r",
@@ -7546,6 +7553,7 @@ test:do_execsql_test(
     "boundary2-2.65.le.4",
     "SELECT a FROM t1 WHERE r <= 9.22337303685477580800e+18 ORDER BY r DESC",
     {3, 28, 17, 45, 27, 43, 13, 26, 10, 34, 25, 56, 7, 19, 57, 35, 46, 22, 39, 36, 14, 51, 20, 40, 12, 6, 9, 24, 18, 42, 15, 62, 48, 50, 23, 16, 8, 61, 30, 49, 4, 31, 5, 41, 60, 59, 38, 33, 52, 53, 54, 32, 29, 37, 1, 11, 47, 63, 58, 44, 21, 64, 2, 55})
+end
 
 test:do_execsql_test(
     "boundary2-2.65.le.5",
@@ -7562,6 +7570,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r > -9.22337303685477580800e+18 ORDER BY a DESC",
     {64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.66.gt.3",
     "SELECT a FROM t1 WHERE r > -9.22337303685477580800e+18 ORDER BY r",
@@ -7571,6 +7580,7 @@ test:do_execsql_test(
     "boundary2-2.66.gt.4",
     "SELECT a FROM t1 WHERE r > -9.22337303685477580800e+18 ORDER BY r DESC",
     {3, 28, 17, 45, 27, 43, 13, 26, 10, 34, 25, 56, 7, 19, 57, 35, 46, 22, 39, 36, 14, 51, 20, 40, 12, 6, 9, 24, 18, 42, 15, 62, 48, 50, 23, 16, 8, 61, 30, 49, 4, 31, 5, 41, 60, 59, 38, 33, 52, 53, 54, 32, 29, 37, 1, 11, 47, 63, 58, 44, 21, 64, 2, 55})
+end
 
 test:do_execsql_test(
     "boundary2-2.66.gt.5",
@@ -7587,6 +7597,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r >= -9.22337303685477580800e+18 ORDER BY a DESC",
     {64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.66.ge.3",
     "SELECT a FROM t1 WHERE r >= -9.22337303685477580800e+18 ORDER BY r",
@@ -7596,6 +7607,7 @@ test:do_execsql_test(
     "boundary2-2.66.ge.4",
     "SELECT a FROM t1 WHERE r >= -9.22337303685477580800e+18 ORDER BY r DESC",
     {3, 28, 17, 45, 27, 43, 13, 26, 10, 34, 25, 56, 7, 19, 57, 35, 46, 22, 39, 36, 14, 51, 20, 40, 12, 6, 9, 24, 18, 42, 15, 62, 48, 50, 23, 16, 8, 61, 30, 49, 4, 31, 5, 41, 60, 59, 38, 33, 52, 53, 54, 32, 29, 37, 1, 11, 47, 63, 58, 44, 21, 64, 2, 55})
+end
 
 test:do_execsql_test(
     "boundary2-2.66.ge.5",
@@ -7612,6 +7624,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r < -9.22337303685477580800e+18 ORDER BY a DESC",
     {})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.66.lt.3",
     "SELECT a FROM t1 WHERE r < -9.22337303685477580800e+18 ORDER BY r",
@@ -7621,6 +7634,7 @@ test:do_execsql_test(
     "boundary2-2.66.lt.4",
     "SELECT a FROM t1 WHERE r < -9.22337303685477580800e+18 ORDER BY r DESC",
     {})
+end
 
 test:do_execsql_test(
     "boundary2-2.66.lt.5",
@@ -7637,6 +7651,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r <= -9.22337303685477580800e+18 ORDER BY a DESC",
     {})
 
+if false then
 test:do_execsql_test(
     "boundary2-2.66.le.3",
     "SELECT a FROM t1 WHERE r <= -9.22337303685477580800e+18 ORDER BY r",
@@ -7646,6 +7661,7 @@ test:do_execsql_test(
     "boundary2-2.66.le.4",
     "SELECT a FROM t1 WHERE r <= -9.22337303685477580800e+18 ORDER BY r DESC",
     {})
+end
 
 test:do_execsql_test(
     "boundary2-2.66.le.5",
@@ -15011,6 +15027,7 @@ test:do_execsql_test(
     "SELECT a FROM t1 WHERE r <= 3 ORDER BY x",
     {59, 60, 41, 5, 55, 2, 64, 21, 44, 58, 63, 47, 11, 1, 37, 29, 32, 54, 53, 52, 33, 38})
 
+if false then
 test:do_execsql_test(
     "boundary2-4.65.gt.1",
     "SELECT a FROM t1 WHERE r > 9.22337303685477580800e+18 ORDER BY a",
@@ -15210,5 +15227,6 @@ test:do_execsql_test(
     "boundary2-4.66.le.5",
     "SELECT a FROM t1 WHERE r <= -9.22337303685477580800e+18 ORDER BY x",
     {})
+end
 
 test:finish_test()

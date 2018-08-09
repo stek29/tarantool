@@ -75,9 +75,9 @@ test:do_execsql_test(
         CREATE INDEX t2ba ON t2(b,a);
         SELECT a, b FROM t2 WHERE b GLOB 'ab*' ORDER BY +a;
     ]], {
-        -- <like3-2.0>
-        1, "abc", 4, "abc"
-        -- </like3-2.0>
+    -- <like3-2.0>
+    1, "abc", 4, "abc"
+     -- </like3-2.0>
     })
 
 test:do_execsql_test(
@@ -85,54 +85,55 @@ test:do_execsql_test(
     [[
         SELECT a, b FROM t2 WHERE +b GLOB 'ab*' ORDER BY +a;
     ]], {
-        -- <like3-2.1>
-        1, "abc", 4, "abc"
-        -- </like3-2.1>
-    })
+    -- <like3-2.1>
+    1, "abc", 4, "abc"
+    -- </like3-2.1>
+     })
 
 test:do_execsql_test(
     "like3-2.2",
     [[
-        SELECT a, b FROM t2 WHERE b>=x'6162' AND b GLOB 'ab*'
+        SELECT a, b FROM t2 WHERE b>='ab' AND b GLOB 'ab*'
     ]], {
-        -- <like3-2.2>
-        4, "abc"
-        -- </like3-2.2>
+    -- <like3-2.2>
+    1, "abc", 4, "abc"
+    -- </like3-2.2>
     })
 
 test:do_execsql_test(
     "like3-2.3",
     [[
-        SELECT a, b FROM t2 WHERE +b>=x'6162' AND +b GLOB 'ab*'
+        SELECT a, b FROM t2 WHERE +b>='ab' AND +b GLOB 'ab*'
     ]], {
-        -- <like3-2.3>
-        4, "abc"
-        -- </like3-2.3>
+    -- <like3-2.3>
+    1, "abc", 4, "abc"
+    -- </like3-2.3>
     })
 
 test:do_execsql_test(
     "like3-2.4",
     [[
-        SELECT a, b FROM t2 WHERE b GLOB 'ab*' AND b>=x'6162'
+        SELECT a, b FROM t2 WHERE b GLOB 'ab*' AND b>='ab'
     ]], {
-        -- <like3-2.4>
-        4, "abc"
-        -- </like3-2.4>
+    -- <like3-2.4>
+    1, "abc", 4, "abc"
+    -- </like3-2.4>
     })
 
 test:do_execsql_test(
     "like3-2.5",
     [[
-        SELECT a, b FROM t2 WHERE +b GLOB 'ab*' AND +b>=x'6162'
+        SELECT a, b FROM t2 WHERE +b GLOB 'ab*' AND +b>='ab'
     ]], {
-        -- <like3-2.5>
-        4, "abc"
-        -- </like3-2.5>
+    -- <like3-2.5>
+    1, "abc", 4, "abc"
+    -- </like3-2.5>
     })
+
 test:execsql([[
     CREATE TABLE t3(x TEXT PRIMARY KEY COLLATE "unicode_ci");
     INSERT INTO t3(x) VALUES('aaa'),('abc'),('abd'),('abe'),('acz');
-    INSERT INTO t3(x) SELECT CAST(x AS blob) FROM t3;
+--    INSERT INTO t3(x) SELECT CAST(x AS blob) FROM t3;
 ]])
 
 -- MUST_WORK #1476 collate nocase

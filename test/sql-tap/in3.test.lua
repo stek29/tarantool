@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(26)
+test:plan(22)
 
 --!./tcltestrunner.lua
 -- 2007 November 29
@@ -302,6 +302,7 @@ test:do_test(
         -- </in3-3.2>
     })
 
+if false then
 test:do_test(
     "in3-3.3",
     function()
@@ -361,7 +362,7 @@ test:do_test(
         1, 1
         -- </in3-3.7>
     })
-
+end
 -----------------------------------------------------------------------
 --
 -- Test using a multi-column index.
