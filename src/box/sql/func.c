@@ -607,41 +607,32 @@ total_changes(sqlite3_context * context, int NotUsed, sqlite3_value ** NotUsed2)
 	sqlite3_result_int(context, sqlite3_total_changes(db));
 }
 
-/*
- * A structure defining how to do GLOB-style comparisons.
- */
-struct compareInfo {
-	u8 matchAll;		/* "*" or "%" */
-	u8 matchOne;		/* "?" or "_" */
-	u8 matchSet;		/* "[" or 0 */
-	u8 noCase;		/* true to ignore case differences */
-};
-
 /**
- * Providing there are symbols in string s this
- * macro returns UTF-8 code of character and
- * promotes pointer to the next symbol in the string.
- * Otherwise return code is SQL_END_OF_STRING.
+ * Providing there are symbols in string s this macro returns
+ * UTF-8 code of character and promotes pointer to the next
+ * symbol in the string. If s points to an invalid UTF-8 symbol
+ * return code is SQL_INVALID_UTF8_SYMBOL. If there're no symbols
+ * left in string s return code is SQL_END_OF_STRING.
  */
 #define Utf8Read(s, e) ucnv_getNextUChar(pUtf8conv, &(s), (e), &(status))
 
 #define SQL_END_OF_STRING        0xffff
 #define SQL_INVALID_UTF8_SYMBOL  0xfffd
 
-static const struct compareInfo globInfo = { '*', '?', '[', 0 };
-
-/* The correct SQL-92 behavior is for the LIKE operator to ignore
- * case.  Thus  'a' LIKE 'A' would be true.
+/**
+ * If SQLITE_CASE_SENSITIVE_LIKE is not defined, then the LIKE
+ * operator is not case sensitive.
  */
-static const struct compareInfo likeInfoNorm = { '%', '_', 0, 1 };
+static const int case_insensitive_like = 1;
 
-/* If SQLITE_CASE_SENSITIVE_LIKE is defined, then the LIKE operator
- * is case sensitive causing 'a' LIKE 'A' to be false
+/**
+ * If SQLITE_CASE_SENSITIVE_LIKE is defined, then the LIKE
+ * operator is case sensitive causing 'a' LIKE 'A' to be false.
  */
-static const struct compareInfo likeInfoAlt = { '%', '_', 0, 0 };
+static const int case_sensitive_like = 0;
 
-/*
- * Possible error returns from sql_utf8_pattern_compare()
+/**
+ * Possible error returns from sql_utf8_pattern_compare().
  */
 #define SQL_MATCH                0
 #define SQL_NOMATCH              1
@@ -650,138 +641,92 @@ static const struct compareInfo likeInfoAlt = { '%', '_', 0, 0 };
 
 /**
  * Compare two UTF-8 strings for equality where the first string
- * is a GLOB or LIKE expression.
- *
- * Globbing rules:
- *
- *      '*'       Matches any sequence of zero or more characters.
- *
- *      '?'       Matches exactly one character.
- *
- *     [...]      Matches one character from the enclosed list of
- *                characters.
- *
- *     [^...]     Matches one character not in the enclosed list.
- *
- * With the [...] and [^...] matching, a ']' character can be
- * included in the list by making it the first character after
- * '[' or '^'. A range of characters can be specified using '-'.
- * Example: "[a-z]" matches any single lower-case letter.
- * To match a '-', make it the last character in the list.
+ * is a LIKE expression.
  *
  * Like matching rules:
  *
- *      '%'       Matches any sequence of zero or more characters.
+ *      '%'       Matches any sequence of zero or more
+ *                characters.
  *
  *      '_'       Matches any one character.
  *
- *      Ec        Where E is the "esc" character and c is any other
- *                character, including '%', '_', and esc, match
- *                exactly c.
- *
- * The comments within this routine usually assume glob matching.
+ *      Ec        Where E is the "esc" character and c is any
+ *                other character, including '%', '_', and esc,
+ *                match exactly c.
  *
  * This routine is usually quick, but can be N**2 in the worst
  * case.
  *
  * @param pattern String containing comparison pattern.
  * @param string String being compared.
- * @param compareInfo Information about how to compare.
- * @param matchOther The escape char (LIKE) or '[' (GLOB).
+ * @param is_like_ci true if LIKE is case insensitive.
+ * @param match_other The escape char for LIKE.
  *
  * @retval SQL_MATCH:               Match.
  *	   SQL_NOMATCH:             No match.
- *	   SQL_NOWILDCARDMATCH:     No match in spite of having *
- *				    or % wildcards.
+ *	   SQL_NOWILDCARDMATCH:     No match in spite of having %
+ *				    wildcard.
  *	   SQL_INVALID_PATTERN:     Pattern contains invalid
  *				    symbol.
  */
 static int
 sql_utf8_pattern_compare(const char *pattern,
 			 const char *string,
-			 const struct compareInfo *pInfo,
-			 UChar32 matchOther)
+			 const int is_like_ci,
+			 UChar32 match_other)
 {
 	/* Next pattern and input string chars */
 	UChar32 c, c2;
-	/* "?" or "_" */
-	UChar32 matchOne = pInfo->matchOne;
-	/* "*" or "%" */
-	UChar32 matchAll = pInfo->matchAll;
-	/* True if uppercase==lowercase */
-	UChar32 noCase = pInfo->noCase;
 	/* One past the last escaped input char */
 	const char *zEscaped = 0;
-	const char * pattern_end = pattern + strlen(pattern);
-	const char * string_end = string + strlen(string);
+	const char *pattern_end = pattern + strlen(pattern);
+	const char *string_end = string + strlen(string);
 	UErrorCode status = U_ZERO_ERROR;
 
 	while (pattern < pattern_end) {
 		c = Utf8Read(pattern, pattern_end);
 		if (c == SQL_INVALID_UTF8_SYMBOL)
 			return SQL_INVALID_PATTERN;
-		if (c == matchAll) {	/* Match "*" */
-			/* Skip over multiple "*" characters in
-			 * the pattern. If there are also "?"
+		if (c == MATCH_ALL_WILDCARD) {
+			/**
+			 * Skip over multiple "%" characters in
+			 * the pattern. If there are also "_"
 			 * characters, skip those as well, but
 			 * consume a single character of the
-			 * input string for each "?" skipped.
+			 * input string for each "_" skipped.
 			 */
 			while ((c = Utf8Read(pattern, pattern_end)) !=
 			       SQL_END_OF_STRING) {
 				if (c == SQL_INVALID_UTF8_SYMBOL)
 					return SQL_INVALID_PATTERN;
-				if (c != matchAll && c != matchOne)
+				if (c != MATCH_ALL_WILDCARD &&
+				    c != MATCH_ONE_WILDCARD)
 					break;
-				if (c == matchOne &&
+				if (c == MATCH_ONE_WILDCARD &&
 				    (c2 = Utf8Read(string, string_end)) ==
 				    SQL_END_OF_STRING)
 					return SQL_NOWILDCARDMATCH;
 				if (c2 == SQL_INVALID_UTF8_SYMBOL)
 					return SQL_NOMATCH;
 			}
-			/*
-			 * "*" at the end of the pattern matches.
+			/**
+			 * "%" at the end of the pattern matches.
 			 */
 			if (c == SQL_END_OF_STRING) {
 				return SQL_MATCH;
 			}
-			if (c == matchOther) {
-				if (pInfo->matchSet == 0) {
-					c = Utf8Read(pattern, pattern_end);
-					if (c == SQL_INVALID_UTF8_SYMBOL)
-						return SQL_INVALID_PATTERN;
-					if (c == SQL_END_OF_STRING)
-						return SQL_NOWILDCARDMATCH;
-				} else {
-					/* "[...]" immediately
-					 * follows the "*". We
-					 * have to do a slow
-					 * recursive search in
-					 * this case, but it is
-					 * an unusual case.
-					 */
-					assert(matchOther < 0x80);
-					while (string < string_end) {
-						int bMatch =
-						    sql_utf8_pattern_compare(
-								&pattern[-1],
-								string,
-								pInfo,
-								matchOther);
-						if (bMatch != SQL_NOMATCH)
-							return bMatch;
-						c = Utf8Read(string, string_end);
-						if (c == SQL_INVALID_UTF8_SYMBOL)
-							return SQL_NOMATCH;
-					}
+			if (c == match_other) {
+				c = Utf8Read(pattern, pattern_end);
+				if (c == SQL_INVALID_UTF8_SYMBOL)
+					return SQL_INVALID_PATTERN;
+				if (c == SQL_END_OF_STRING)
 					return SQL_NOWILDCARDMATCH;
-				}
 			}
 
-			/* At this point variable c contains the
+			/**
+			 * At this point variable c contains the
 			 * first character of the pattern string
-			 * past the "*". Search in the input
+			 * past the "%". Search in the input
 			 * string for the first matching
 			 * character and recursively continue the
 			 * match from that point.
@@ -793,7 +738,7 @@ sql_utf8_pattern_compare(const char *pattern,
 			 */
 
 			int bMatch;
-			if (noCase)
+			if (is_like_ci)
 				c = u_tolower(c);
 			while (string < string_end){
 				/**
@@ -809,7 +754,7 @@ sql_utf8_pattern_compare(const char *pattern,
 				c2 = Utf8Read(string, string_end);
 				if (c2 == SQL_INVALID_UTF8_SYMBOL)
 					return SQL_NOMATCH;
-				if (!noCase) {
+				if (!is_like_ci) {
 					if (c2 != c)
 						continue;
 				} else {
@@ -818,79 +763,27 @@ sql_utf8_pattern_compare(const char *pattern,
 				}
 				bMatch = sql_utf8_pattern_compare(pattern,
 								  string,
-								  pInfo,
-								  matchOther);
+								  is_like_ci,
+								  match_other);
 				if (bMatch != SQL_NOMATCH)
 					return bMatch;
 			}
 			return SQL_NOWILDCARDMATCH;
 		}
-		if (c == matchOther) {
-			if (pInfo->matchSet == 0) {
-				c = Utf8Read(pattern, pattern_end);
-				if (c == SQL_INVALID_UTF8_SYMBOL)
-					return SQL_INVALID_PATTERN;
-				if (c == SQL_END_OF_STRING)
-					return SQL_NOMATCH;
-				zEscaped = pattern;
-			} else {
-				UChar32 prior_c = 0;
-				int seen = 0;
-				int invert = 0;
-				c = Utf8Read(string, string_end);
-				if (c == SQL_INVALID_UTF8_SYMBOL)
-					return SQL_NOMATCH;
-				if (string == string_end)
-					return SQL_NOMATCH;
-				c2 = Utf8Read(pattern, pattern_end);
-				if (c2 == SQL_INVALID_UTF8_SYMBOL)
-					return SQL_INVALID_PATTERN;
-				if (c2 == '^') {
-					invert = 1;
-					c2 = Utf8Read(pattern, pattern_end);
-					if (c2 == SQL_INVALID_UTF8_SYMBOL)
-						return SQL_INVALID_PATTERN;
-				}
-				if (c2 == ']') {
-					if (c == ']')
-						seen = 1;
-					c2 = Utf8Read(pattern, pattern_end);
-					if (c2 == SQL_INVALID_UTF8_SYMBOL)
-						return SQL_INVALID_PATTERN;
-				}
-				while (c2 != SQL_END_OF_STRING && c2 != ']') {
-					if (c2 == '-' && pattern[0] != ']'
-					    && pattern < pattern_end
-					    && prior_c > 0) {
-						c2 = Utf8Read(pattern, pattern_end);
-						if (c2 == SQL_INVALID_UTF8_SYMBOL)
-							return SQL_INVALID_PATTERN;
-						if (c >= prior_c && c <= c2)
-							seen = 1;
-						prior_c = 0;
-					} else {
-						if (c == c2) {
-							seen = 1;
-						}
-						prior_c = c2;
-					}
-					c2 = Utf8Read(pattern, pattern_end);
-					if (c2 == SQL_INVALID_UTF8_SYMBOL)
-						return SQL_INVALID_PATTERN;
-				}
-				if (pattern == pattern_end ||
-				    (seen ^ invert) == 0) {
-					return SQL_NOMATCH;
-				}
-				continue;
-			}
+		if (c == match_other) {
+			c = Utf8Read(pattern, pattern_end);
+			if (c == SQL_INVALID_UTF8_SYMBOL)
+				return SQL_INVALID_PATTERN;
+			if (c == SQL_END_OF_STRING)
+				return SQL_NOMATCH;
+			zEscaped = pattern;
 		}
 		c2 = Utf8Read(string, string_end);
 		if (c2 == SQL_INVALID_UTF8_SYMBOL)
 			return SQL_NOMATCH;
 		if (c == c2)
 			continue;
-		if (noCase){
+		if (is_like_ci) {
 			/**
 			 * Small optimisation. Reduce number of
 			 * calls to u_tolower function. SQL
@@ -903,7 +796,7 @@ sql_utf8_pattern_compare(const char *pattern,
 			    c == u_tolower(c2))
 				continue;
 		}
-		if (c == matchOne && pattern != zEscaped &&
+		if (c == MATCH_ONE_WILDCARD && pattern != zEscaped &&
 		    c2 != SQL_END_OF_STRING)
 			continue;
 		return SQL_NOMATCH;
@@ -911,55 +804,52 @@ sql_utf8_pattern_compare(const char *pattern,
 	return string == string_end ? SQL_MATCH : SQL_NOMATCH;
 }
 
-/*
- * The sqlite3_strglob() interface.  Return 0 on a match (like strcmp()) and
- * non-zero if there is no match.
+/**
+ * Compare two UTF-8 strings for equality using case sensitive
+ * sql_utf8_pattern_compare.
  */
 int
-sqlite3_strglob(const char *zGlobPattern, const char *zString)
+sql_strlike_cs(const char *zPattern, const char *zStr, unsigned int esc)
 {
-	return sql_utf8_pattern_compare(zGlobPattern, zString, &globInfo, '[');
+	return sql_utf8_pattern_compare(zPattern, zStr, case_sensitive_like, esc);
 }
 
-/*
- * The sqlite3_strlike() interface.  Return 0 on a match and non-zero for
- * a miss - like strcmp().
+/**
+ * Compare two UTF-8 strings for equality using case insensitive
+ * sql_utf8_pattern_compare.
  */
 int
-sqlite3_strlike(const char *zPattern, const char *zStr, unsigned int esc)
+sql_strlike_ci(const char *zPattern, const char *zStr, unsigned int esc)
 {
-	return sql_utf8_pattern_compare(zPattern, zStr, &likeInfoNorm, esc);
+	return sql_utf8_pattern_compare(zPattern, zStr, case_insensitive_like, esc);
 }
 
-/*
- * Count the number of times that the LIKE operator (or GLOB which is
- * just a variation of LIKE) gets called.  This is used for testing
- * only.
+/**
+ * Count the number of times that the LIKE operator gets called.
+ * This is used for testing only.
  */
 #ifdef SQLITE_TEST
 int sqlite3_like_count = 0;
 #endif
 
-/*
- * Implementation of the like() SQL function.  This function implements
- * the build-in LIKE operator.  The first argument to the function is the
- * pattern and the second argument is the string.  So, the SQL statements:
+/**
+ * Implementation of the like() SQL function. This function
+ * implements the built-in LIKE operator. The first argument to
+ * the function is the pattern and the second argument is the
+ * string. So, the SQL statements of the following type:
  *
  *       A LIKE B
  *
- * is implemented as like(B,A).
- *
- * This same function (with a different compareInfo structure) computes
- * the GLOB operator.
+ * are implemented as like(B,A).
  */
 static void
-likeFunc(sqlite3_context * context, int argc, sqlite3_value ** argv)
+likeFunc(sqlite3_context *context, int argc, sqlite3_value **argv)
 {
 	const char *zA, *zB;
 	u32 escape;
 	int nPat;
 	sqlite3 *db = sqlite3_context_db_handle(context);
-	struct compareInfo *pInfo = sqlite3_user_data(context);
+	int *is_like_ci = sqlite3_user_data(context);
 
 #ifdef SQLITE_LIKE_DOESNT_MATCH_BLOBS
 	if (sqlite3_value_type(argv[0]) == SQLITE_BLOB
@@ -974,8 +864,9 @@ likeFunc(sqlite3_context * context, int argc, sqlite3_value ** argv)
 	zB = (const char *) sqlite3_value_text(argv[0]);
 	zA = (const char *) sqlite3_value_text(argv[1]);
 
-	/* Limit the length of the LIKE or GLOB pattern to avoid
-	 * problems of deep recursion and N*N behavior in
+	/**
+	 * Limit the length of the LIKE pattern to avoid problems
+	 * of deep recursion and N*N behavior in
 	 * sql_utf8_pattern_compare().
 	 */
 	nPat = sqlite3_value_bytes(argv[0]);
@@ -983,28 +874,28 @@ likeFunc(sqlite3_context * context, int argc, sqlite3_value ** argv)
 	testcase(nPat == db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH] + 1);
 	if (nPat > db->aLimit[SQLITE_LIMIT_LIKE_PATTERN_LENGTH]) {
 		sqlite3_result_error(context,
-				     "LIKE or GLOB pattern too complex", -1);
+				     "LIKE pattern is too complex", -1);
 		return;
 	}
 	/* Encoding did not change */
 	assert(zB == (const char *) sqlite3_value_text(argv[0]));
 
 	if (argc == 3) {
-		/* The escape character string must consist of a single UTF-8 character.
-		 * Otherwise, return an error.
+		/**
+		 * The escape character string must consist of a
+		 * single UTF-8 character. Otherwise, return an
+		 * error.
 		 */
 		const unsigned char *zEsc = sqlite3_value_text(argv[2]);
 		if (zEsc == 0)
 			return;
+		const char *const err_msg =
+			"ESCAPE expression must be a single character";
 		if (sqlite3Utf8CharLen((char *)zEsc, -1) != 1) {
-			sqlite3_result_error(context,
-					     "ESCAPE expression must be a single character",
-					     -1);
+			sqlite3_result_error(context, err_msg, -1);
 			return;
 		}
 		escape = sqlite3Utf8Read(&zEsc);
-	} else {
-		escape = pInfo->matchSet;
 	}
 	if (!zA || !zB)
 		return;
@@ -1012,10 +903,11 @@ likeFunc(sqlite3_context * context, int argc, sqlite3_value ** argv)
 	sqlite3_like_count++;
 #endif
 	int res;
-	res = sql_utf8_pattern_compare(zB, zA, pInfo, escape);
+	res = sql_utf8_pattern_compare(zB, zA, *is_like_ci, escape);
 	if (res == SQL_INVALID_PATTERN) {
-		sqlite3_result_error(context, "LIKE or GLOB pattern can only"
-				     " contain UTF-8 characters", -1);
+		const char *const err_msg =
+			"LIKE pattern can only contain UTF-8 characters";
+		sqlite3_result_error(context, err_msg, -1);
 		return;
 	}
 	sqlite3_result_int(context, res == SQL_MATCH);
@@ -1811,64 +1703,54 @@ setLikeOptFlag(sqlite3 * db, const char *zName, u8 flagVal)
 	}
 }
 
-/*
- * Register the built-in LIKE and GLOB functions.  The caseSensitive
- * parameter determines whether or not the LIKE operator is case
- * sensitive.  GLOB is always case sensitive.
+/**
+ * Register the built-in LIKE function.
+ *
+ * @param db database structure.
+ * @param is_case_sensitive whether like should be case sensitive
+ * 			 or not.
+ *
+ * @retval none.
  */
 void
-sqlite3RegisterLikeFunctions(sqlite3 * db, int caseSensitive)
+sqlite3RegisterLikeFunctions(sqlite3 *db, int is_case_sensitive)
 {
-	struct compareInfo *pInfo;
-	if (caseSensitive) {
-		pInfo = (struct compareInfo *)&likeInfoAlt;
-	} else {
-		pInfo = (struct compareInfo *)&likeInfoNorm;
-	}
-	sqlite3CreateFunc(db, "LIKE", 2, 0, pInfo, likeFunc, 0, 0, 0);
-	sqlite3CreateFunc(db, "LIKE", 3, 0, pInfo, likeFunc, 0, 0, 0);
-	sqlite3CreateFunc(db, "GLOB", 2, 0, (struct compareInfo *)&globInfo, likeFunc, 0, 0, 0);
-	setLikeOptFlag(db, "GLOB", SQLITE_FUNC_LIKE | SQLITE_FUNC_CASE);
+	int *is_like_ci;
+	if (is_case_sensitive)
+		is_like_ci = (int *)&case_sensitive_like;
+	else
+		is_like_ci = (int *)&case_insensitive_like;
+	sqlite3CreateFunc(db, "LIKE", 2, 0, is_like_ci, likeFunc, 0, 0, 0);
+	sqlite3CreateFunc(db, "LIKE", 3, 0, is_like_ci, likeFunc, 0, 0, 0);
 	setLikeOptFlag(db, "LIKE",
-		       caseSensitive ? (SQLITE_FUNC_LIKE | SQLITE_FUNC_CASE) :
-		       SQLITE_FUNC_LIKE);
+		       is_case_sensitive ? (SQLITE_FUNC_LIKE |
+		       SQLITE_FUNC_CASE) : SQLITE_FUNC_LIKE);
 }
 
-/*
- * pExpr points to an expression which implements a function.  If
- * it is appropriate to apply the LIKE optimization to that function
- * then set aWc[0] through aWc[2] to the wildcard characters and
- * return TRUE.  If the function is not a LIKE-style function then
- * return FALSE.
+/**
+ * Check if the function implements LIKE-style comparison & if it
+ * is appropriate to apply a LIKE query optimization.
  *
- * *pIsNocase is set to true if uppercase and lowercase are equivalent for
- * the function (default for LIKE).  If the function makes the distinction
- * between uppercase and lowercase (as does GLOB) then *pIsNocase is set to
- * false.
+ * @param db database structure.
+ * @param pExpr pointer to a function-implementing expression.
+ * @param is_like_ci true if LIKE is case insensitive.
+ *
+ * @retval 0 if it's appropriate to apply optimization.
+ *         1 if it's not.
  */
 int
-sqlite3IsLikeFunction(sqlite3 * db, Expr * pExpr, int *pIsNocase, char *aWc)
+sql_is_like_func(sqlite3 *db, Expr *pExpr, int *is_like_ci)
 {
 	FuncDef *pDef;
-	if (pExpr->op != TK_FUNCTION
-	    || !pExpr->x.pList || pExpr->x.pList->nExpr != 2) {
+	if (pExpr->op != TK_FUNCTION || !pExpr->x.pList ||
+	    pExpr->x.pList->nExpr != 2)
 		return 0;
-	}
 	assert(!ExprHasProperty(pExpr, EP_xIsSelect));
 	pDef = sqlite3FindFunction(db, pExpr->u.zToken, 2, 0);
 	if (NEVER(pDef == 0) || (pDef->funcFlags & SQLITE_FUNC_LIKE) == 0) {
 		return 0;
 	}
-
-	/* The memcpy() statement assumes that the wildcard characters are
-	 * the first three statements in the compareInfo structure.  The
-	 * asserts() that follow verify that assumption
-	 */
-	memcpy(aWc, pDef->pUserData, 3);
-	assert((char *)&likeInfoAlt == (char *)&likeInfoAlt.matchAll);
-	assert(&((char *)&likeInfoAlt)[1] == (char *)&likeInfoAlt.matchOne);
-	assert(&((char *)&likeInfoAlt)[2] == (char *)&likeInfoAlt.matchSet);
-	*pIsNocase = (pDef->funcFlags & SQLITE_FUNC_CASE) == 0;
+	*is_like_ci = (pDef->funcFlags & SQLITE_FUNC_CASE) == 0;
 	return 1;
 }
 
@@ -1962,16 +1844,14 @@ sqlite3RegisterBuiltinFunctions(void)
 		AGGREGATE(group_concat, 2, 0, 0, groupConcatStep,
 			  groupConcatFinalize),
 
-		LIKEFUNC(glob, 2, &globInfo,
-			 SQLITE_FUNC_LIKE | SQLITE_FUNC_CASE),
 #ifdef SQLITE_CASE_SENSITIVE_LIKE
-		LIKEFUNC(like, 2, &likeInfoAlt,
+		LIKEFUNC(like, 2, &case_sensitive_like,
 			 SQLITE_FUNC_LIKE | SQLITE_FUNC_CASE),
-		LIKEFUNC(like, 3, &likeInfoAlt,
+		LIKEFUNC(like, 3, &case_sensitive_like,
 			 SQLITE_FUNC_LIKE | SQLITE_FUNC_CASE),
 #else
-		LIKEFUNC(like, 2, &likeInfoNorm, SQLITE_FUNC_LIKE),
-		LIKEFUNC(like, 3, &likeInfoNorm, SQLITE_FUNC_LIKE),
+		LIKEFUNC(like, 2, &case_insensitive_like, SQLITE_FUNC_LIKE),
+		LIKEFUNC(like, 3, &case_insensitive_like, SQLITE_FUNC_LIKE),
 #endif
 #ifdef SQLITE_ENABLE_UNKNOWN_SQL_FUNCTION
 		FUNCTION(unknown, -1, 0, 0, unknownFunc),

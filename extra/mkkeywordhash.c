@@ -159,7 +159,6 @@ static Keyword aKeywordTable[] = {
   { "FOR",                    "TK_FOR",         TRIGGER,          true  },
   { "FOREIGN",                "TK_FOREIGN",     FKEY,             true  },
   { "FROM",                   "TK_FROM",        ALWAYS,           true  },
-  { "GLOB",                   "TK_LIKE_KW",     ALWAYS,           false },
   { "GROUP",                  "TK_GROUP",       ALWAYS,           true  },
   { "HAVING",                 "TK_HAVING",      ALWAYS,           true  },
   { "IF",                     "TK_IF",          ALWAYS,           true  },

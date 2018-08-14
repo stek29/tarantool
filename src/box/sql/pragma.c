@@ -771,8 +771,10 @@ sqlite3Pragma(Parse * pParse, Token * pId,	/* First part of [schema.]id field */
 		}
 #endif
 
-		/* Reinstall the LIKE and GLOB functions.  The variant of LIKE *
-		 * used will be case sensitive or not depending on the RHS.
+		/**
+		 * Reinstall the LIKE and functions. The variant
+		 * of LIKE * used will be case sensitive or not
+		 * depending on the RHS.
 		 */
 	case PragTyp_CASE_SENSITIVE_LIKE:{
 			if (zRight) {

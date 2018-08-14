@@ -164,8 +164,7 @@ enum {
 #endif
 
 /*
- * Maximum length (in bytes) of the pattern in a LIKE or GLOB
- * operator.
+ * Maximum length (in bytes) of the pattern in a LIKE operator.
  */
 #ifndef SQLITE_MAX_LIKE_PATTERN_LENGTH
 #define SQLITE_MAX_LIKE_PATTERN_LENGTH 50000
