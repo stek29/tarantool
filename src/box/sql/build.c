@@ -1629,75 +1629,43 @@ sql_store_select(struct Parse *parse_context, struct Select *select)
 	parse_context->parsed_ast.select = select_copy;
 }
 
-/**
- * Create expression record "@col_name = '@col_value'".
- *
- * @param parse The parsing context.
- * @param col_name Name of column.
- * @param col_value Name of row.
- * @retval not NULL on success.
- * @retval NULL on failure.
- */
-static struct Expr *
-sql_id_eq_str_expr(struct Parse *parse, const char *col_name,
-		   const char *col_value)
-{
-	struct sqlite3 *db = parse->db;
-
-	struct Expr *col_name_expr = sqlite3Expr(db, TK_ID, col_name);
-	if (col_name_expr == NULL)
-		return NULL;
-	struct Expr *col_value_expr = sqlite3Expr(db, TK_STRING, col_value);
-	if (col_value_expr == NULL) {
-		sql_expr_delete(db, col_name_expr, false);
-		return NULL;
-	}
-	return sqlite3PExpr(parse, TK_EQ, col_name_expr, col_value_expr);
-}
-
 void
 vdbe_emit_stat_space_clear(struct Parse *parse, const char *stat_table_name,
-			   const char *idx_name, const char *table_name)
+			   uint32_t space_id, uint32_t index_id)
 {
-	assert(idx_name != NULL || table_name != NULL);
 	struct sqlite3 *db = parse->db;
 	assert(!db->mallocFailed);
 	struct SrcList *src_list = sql_alloc_src_list(db);
 	if (src_list != NULL)
 		src_list->a[0].zName = sqlite3DbStrDup(db, stat_table_name);
-	struct Expr *where = NULL;
-	if (idx_name != NULL) {
-		struct Expr *expr = sql_id_eq_str_expr(parse, "idx", idx_name);
-		if (expr != NULL)
-			where = sqlite3ExprAnd(db, expr, where);
+	struct Expr *expr = NULL;
+	struct Expr *col = sqlite3Expr(db, TK_ID, "space_id");
+	struct Expr *val = sqlite3ExprInteger(db, space_id);
+	if (col != NULL && val != NULL)
+		expr = sqlite3PExpr(parse, TK_EQ, col, val);
+	if (index_id != BOX_ID_NIL && expr != NULL) {
+		col = sqlite3Expr(db, TK_ID, "index_id");
+		val = sqlite3ExprInteger(db, index_id);
+		expr = sqlite3ExprAnd(db, sqlite3PExpr(parse, TK_EQ, col, val),
+				      expr);
 	}
-	if (table_name != NULL) {
-		struct Expr *expr = sql_id_eq_str_expr(parse, "tbl", table_name);
-		if (expr != NULL)
-			where = sqlite3ExprAnd(db, expr, where);
-	}
-	/**
-	 * On memory allocation error sql_table delete_from
-	 * releases memory for its own.
-	 */
-	sql_table_delete_from(parse, src_list, where);
+	sql_table_delete_from(parse, src_list, expr);
 }
 
 /**
  * Remove entries from the _sql_stat1 and _sql_stat4
  * system spaces after a DROP INDEX or DROP TABLE command.
  *
- * @param parse      The parsing context.
- * @param table_name The table to be dropped or
- *                   the table that contains index to be dropped.
- * @param idx_name   Index to be dropped.
+ * @param parse The parsing context.
+ * @param space_id Id of table to be dropped or table that
+ *        contains index to be dropped.
+ * @param index_id Id of index to be dropped.
  */
 static void
-sql_clear_stat_spaces(struct Parse *parse, const char *table_name,
-		      const char *idx_name)
+sql_clear_stat_spaces(struct Parse *parse, uint32_t space_id, uint32_t index_id)
 {
-	vdbe_emit_stat_space_clear(parse, "_sql_stat4", idx_name, table_name);
-	vdbe_emit_stat_space_clear(parse, "_sql_stat1", idx_name, table_name);
+	vdbe_emit_stat_space_clear(parse, "_sql_stat4", space_id, index_id);
+	vdbe_emit_stat_space_clear(parse, "_sql_stat1", space_id, index_id);
 }
 
 /**
@@ -1915,7 +1883,7 @@ sql_drop_table(struct Parse *parse_context, struct SrcList *table_name_list,
 			goto exit_drop_table;
 		}
 	}
-	sql_clear_stat_spaces(parse_context, space_name, NULL);
+	sql_clear_stat_spaces(parse_context, space->def->id, BOX_ID_NIL);
 	sql_code_drop_table(parse_context, space, is_view);
 
  exit_drop_table:
@@ -2776,7 +2744,8 @@ sql_drop_index(struct Parse *parse_context, struct SrcList *index_name_list,
 	 * But firstly, delete statistics since schema
 	 * changes after DDL.
 	 */
-	sql_clear_stat_spaces(parse_context, table_name, index->def->name);
+	sql_clear_stat_spaces(parse_context, space->def->id, index->def->iid);
+
 	int record_reg = ++parse_context->nMem;
 	int space_id_reg = ++parse_context->nMem;
 	sqlite3VdbeAddOp2(v, OP_Integer, space_id, space_id_reg);

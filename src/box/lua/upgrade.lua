@@ -520,11 +520,11 @@ local function upgrade_to_2_1_0()
     _index:insert{_trigger.id, 1, 'space_id', 'tree', { unique = false },
                   {{1, 'unsigned'}}}
 
-    local stat1_ft = {{name='tbl', type='string'},
-                      {name='idx', type='string'},
+    local stat1_ft = {{name='space_id', type='unsigned'},
+                      {name='index_id', type='unsigned'},
                       {name='stat', type='string'}}
-    local stat4_ft = {{name='tbl', type='string'},
-                      {name='idx', type='string'},
+    local stat4_ft = {{name='space_id', type='unsigned'},
+                      {name='index_id', type='unsigned'},
                       {name='neq', type='string'},
                       {name='nlt', type='string'},
                       {name='ndlt', type='string'},
@@ -536,7 +536,7 @@ local function upgrade_to_2_1_0()
 
     log.info("create index primary on _sql_stat1")
     _index:insert{box.schema.SQL_STAT1_ID, 0, 'primary', 'tree',
-                  {unique = true}, {{0, 'string'}, {1, 'string'}}}
+                  {unique = true}, {{0, 'unsigned'}, {1, 'unsigned'}}}
 
     log.info("create space _sql_stat4")
     _space:insert{box.schema.SQL_STAT4_ID, ADMIN, '_sql_stat4', 'memtx', 0,
@@ -544,7 +544,7 @@ local function upgrade_to_2_1_0()
 
     log.info("create index primary on _sql_stat4")
     _index:insert{box.schema.SQL_STAT4_ID, 0, 'primary', 'tree',
-                  {unique = true}, {{0, 'string'}, {1, 'string'},
+                  {unique = true}, {{0, 'unsigned'}, {1, 'unsigned'},
                                     {5, 'scalar'}}}
 
     local fk_constr_ft = {{name='name', type='string'},

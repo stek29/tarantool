@@ -4843,11 +4843,13 @@ vdbe_emit_halt_with_presence_test(struct Parse *parser, int space_id,
  *
  * @param parse The parsing context.
  * @param stat_table_name System stat table name.
- * @param idx_name Index name.
- * @param table_name Table name.
+ * @param table_id Id of table of which analysis will be deleted.
+ * @param index_id Id of index of which analysis will be deleted.
+ *        If index_id is BOX_ID_NIL than analysis of all indexes
+ *        of selected table will be deleted.
  */
 void
 vdbe_emit_stat_space_clear(struct Parse *parse, const char *stat_table_name,
-			   const char *idx_name, const char *table_name);
+			   uint32_t table_id, uint32_t index_id);
 
 #endif				/* SQLITEINT_H */

@@ -49,15 +49,19 @@ test:do_test(
         -- </analyze4-1.0>
     })
 
+t1 = box.space.T1
+
 -- Verify that the t1b index shows that it does not narrow down the
 -- search any at all.
 --
 test:do_execsql_test(
     "analyze4-1.1",
-    [[ SELECT "idx", "stat" FROM "_sql_stat1" WHERE "tbl"='T1' ORDER BY "idx"; ]],
+    string.format([[
+        SELECT "index_id", "stat" FROM "_sql_stat1" WHERE "space_id"=%i ORDER BY "index_id";
+    ]], t1.id),
     {
         -- <analyze4-1.1>
-        "T1","128 1", "T1A", "128 1", "T1B", "128 128"
+        0,"128 1", 1, "128 1", 2, "128 128"
         -- </analyze4-1.1>
     })
 
@@ -68,16 +72,16 @@ test:do_execsql_test(
 test:do_test(
     "analyze4-1.2",
     function()
-        return test:execsql([[
-            UPDATE t1 SET b='x' WHERE a%2;
+        return test:execsql(string.format([[
+            UPDATE t1 SET b='x' WHERE a%%2;
 -- pragma vdbe_debug=1;
             ANALYZE;
 -- pragma vdbe_debug=0;
-            SELECT "idx", "stat" FROM "_sql_stat1" WHERE "tbl"='T1' ORDER BY "idx";
-        ]])
+            SELECT "index_id", "stat" FROM "_sql_stat1" WHERE "space_id"=%i ORDER BY "index_id";
+        ]], t1.id))
     end, {
         -- <analyze4-1.2>
-        "T1", "128 1", "T1A", "128 1", "T1B", "128 64"
+        0, "128 1", 1, "128 1", 2, "128 64"
         -- </analyze4-1.2>
     })
 
@@ -85,37 +89,42 @@ test:do_test(
 -- Create a multi-column indices using t1.b and verify that ANALYZE 
 -- processes them correctly.
 --
+
+test:execsql([[
+    -- Tarantool doesn't suppoort ALTER stmt yet.
+    -- UPDATE t1 SET b=NULL;
+    --ALTER TABLE t1 ADD COLUMN c;
+    --ALTER TABLE t1 ADD COLUMN d;
+    -- So, re-create the table and its contents
+    DROP TABLE t1;
+    CREATE TABLE t1(id INTEGER PRIMARY KEY AUTOINCREMENT, a,b,c DEFAULT NULL,d DEFAULT NULL);
+    CREATE INDEX t1a ON t1(a);
+    CREATE INDEX t1b ON t1(b);
+    INSERT INTO t1 (a,b) VALUES(1,NULL);
+    INSERT INTO t1 (a,b) SELECT a+1, b FROM t1;
+    INSERT INTO t1 (a,b) SELECT a+2, b FROM t1;
+    INSERT INTO t1 (a,b) SELECT a+4, b FROM t1;
+    INSERT INTO t1 (a,b) SELECT a+8, b FROM t1;
+    INSERT INTO t1 (a,b) SELECT a+16, b FROM t1;
+    INSERT INTO t1 (a,b) SELECT a+32, b FROM t1;
+    INSERT INTO t1 (a,b) SELECT a+64, b FROM t1;
+
+    UPDATE t1 SET c=a/4, d=a/2;
+    CREATE INDEX t1bcd ON t1(b,c,d);
+    CREATE INDEX t1cdb ON t1(c,d,b);
+    CREATE INDEX t1cbd ON t1(c,b,d);
+    ANALYZE;
+]])
+
+t1 = box.space.T1
+
 test:do_execsql_test(
     "analyze4-1.3",
-    [[
-            -- Tarantool doesn't suppoort ALTER stmt yet.
-            -- UPDATE t1 SET b=NULL;
-            --ALTER TABLE t1 ADD COLUMN c;
-            --ALTER TABLE t1 ADD COLUMN d;
-            -- So, re-create the table and its contents
-            DROP TABLE t1;
-            CREATE TABLE t1(id INTEGER PRIMARY KEY AUTOINCREMENT, a,b,c DEFAULT NULL,d DEFAULT NULL);
-            CREATE INDEX t1a ON t1(a);
-            CREATE INDEX t1b ON t1(b);
-            INSERT INTO t1 (a,b) VALUES(1,NULL);
-            INSERT INTO t1 (a,b) SELECT a+1, b FROM t1;
-            INSERT INTO t1 (a,b) SELECT a+2, b FROM t1;
-            INSERT INTO t1 (a,b) SELECT a+4, b FROM t1;
-            INSERT INTO t1 (a,b) SELECT a+8, b FROM t1;
-            INSERT INTO t1 (a,b) SELECT a+16, b FROM t1;
-            INSERT INTO t1 (a,b) SELECT a+32, b FROM t1;
-            INSERT INTO t1 (a,b) SELECT a+64, b FROM t1;
-
-            UPDATE t1 SET c=a/4, d=a/2;
-            CREATE INDEX t1bcd ON t1(b,c,d);
-            CREATE INDEX t1cdb ON t1(c,d,b);
-            CREATE INDEX t1cbd ON t1(c,b,d);
-            ANALYZE;
-            SELECT "idx", "stat" FROM "_sql_stat1" WHERE "tbl"='T1' ORDER BY "idx";
-    ]]
-    , {
+    string.format([[
+            SELECT "index_id", "stat" FROM "_sql_stat1" WHERE "space_id"=%i ORDER BY "index_id";
+    ]], t1.id), {
         -- <analyze4-1.3>
-        "T1","128 1", "T1A", "128 1", "T1B", "128 128", "T1BCD", "128 128 4 2", "T1CBD", "128 4 4 2", "T1CDB", "128 4 2 2"
+        0,"128 1", 1, "128 1", 2, "128 128", 3, "128 128 4 2", 4, "128 4 2 2", 5, "128 4 4 2"
         -- </analyze4-1.3>
     })
 

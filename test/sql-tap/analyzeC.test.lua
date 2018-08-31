@@ -30,9 +30,7 @@ testprefix = "analyzeC"
 -- Baseline case.  Range queries work OK.  Indexes can be used for
 -- ORDER BY.
 
-test:do_execsql_test(
-    1.0,
-    [[
+test:execsql([[
         DROP TABLE IF EXISTS t1;
         CREATE TABLE t1(a PRIMARY KEY, b, c, d);
         INSERT INTO t1(a,b,c,d) VALUES(1,1,2,3),(2,7,8,9),(3,4,5,6),(4,10,11,12),(5,4,8,12),(6,1,11,111);
@@ -40,10 +38,17 @@ test:do_execsql_test(
         CREATE INDEX t1c ON t1(c);
         ANALYZE;
         DELETE FROM "_sql_stat1";
-        INSERT INTO "_sql_stat1"("tbl","idx","stat") VALUES('t1','t1b','12345 2'),('t1','t1c','12345 4');
+    ]]
+)
+t1 = box.space.T1
+
+test:do_execsql_test(
+    1.0,
+    string.format([[
+        INSERT INTO "_sql_stat1"("space_id","index_id","stat") VALUES(%i,1,'12345 2'),(%i,2,'12345 4');
         ANALYZE;
         SELECT b,c,d, '#' FROM t1 WHERE b BETWEEN 3 AND 8 ORDER BY d;
-    ]], {
+    ]], t1.id, t1.id), {
         -- <1.0>
         4, 5, 6, "#", 7, 8, 9, "#", 4, 8, 12, "#"
         -- </1.0>
@@ -85,11 +90,12 @@ test:do_execsql_test(
 --
 test:do_execsql_test(
     2.0,
+    string.format(
     [[
-        UPDATE "_sql_stat1" SET "stat"='12345 2 unordered' WHERE "idx"='t1b';
+        UPDATE "_sql_stat1" SET "stat"='12345 2 unordered' WHERE "index_id"=%i;
         ANALYZE;
         SELECT b, c, d, '#' FROM t1 WHERE b BETWEEN 3 AND 8 ORDER BY d;
-    ]], {
+    ]], box.space.T1.index['T1B'].id), {
         -- <2.0>
         4, 5, 6, "#", 7, 8, 9, "#", 4, 8, 12, "#"
         -- </2.0>
@@ -130,11 +136,12 @@ test:do_execsql_test(
 --
 test:do_execsql_test(
     3.0,
+    string.format(
     [[
-        UPDATE "_sql_stat1" SET "stat"='12345 2 whatever=5 unordered xyzzy=11' WHERE "idx"='t1b';
+        UPDATE "_sql_stat1" SET "stat"='12345 2 whatever=5 unordered xyzzy=11' WHERE "index_id"=%i;
         ANALYZE;
         SELECT b, c, d, '#' FROM t1 WHERE b BETWEEN 3 AND 8 ORDER BY d;
-    ]], {
+    ]], box.space.T1.index['T1B'].id), {
         -- <3.0>
         4, 5, 6, "#", 7, 8, 9, "#", 4, 8, 12, "#"
         -- </3.0>
@@ -173,17 +180,22 @@ test:do_execsql_test(
 
 -- The sz=NNN parameter determines which index to scan
 --
-test:do_execsql_test(
-    4.0,
-    [[
+
+test:execsql([[
         DROP INDEX t1b ON t1;
         CREATE INDEX t1bc ON t1(b,c);
         CREATE INDEX t1db ON t1(d,b);
         DELETE FROM "_sql_stat1";
-        INSERT INTO "_sql_stat1"("tbl","idx","stat") VALUES('t1','t1bc','12345 3 2 sz=10'),('t1','t1db','12345 3 2 sz=20');
+    ]]
+)
+
+test:do_execsql_test(
+    4.0,
+    string.format([[
+        INSERT INTO "_sql_stat1"("space_id","index_id","stat") VALUES(%i,%i,'12345 3 2 sz=10'),(%i,%i,'12345 3 2 sz=20');
         ANALYZE;
         SELECT count(b) FROM t1;
-    ]], {
+    ]], t1.id, t1.index['T1BC'].id, t1.id, t1.index['T1DB'].id), {
         -- <4.0>
         6
         -- </4.0>
@@ -201,12 +213,13 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     4.2,
+    string.format(
     [[
         DELETE FROM "_sql_stat1";
-        INSERT INTO "_sql_stat1"("tbl","idx","stat") VALUES('t1','t1bc','12345 3 2 sz=20'),('t1','t1db','12345 3 2 sz=10');
+        INSERT INTO "_sql_stat1"("space_id","index_id","stat") VALUES(%i,%i,'12345 3 2 sz=20'),(%i,%i,'12345 3 2 sz=10');
         ANALYZE;
         SELECT count(b) FROM t1;
-    ]], {
+    ]], t1.id, t1.index['T1BC'].id, t1.id, t1.index['T1DB'].id), {
         -- <4.2>
         6
         -- </4.2>
@@ -227,14 +240,14 @@ test:do_execsql_test(
 --
 test:do_execsql_test(
     5.0,
-    [[
+    string.format([[
         DELETE FROM "_sql_stat1";
-        INSERT INTO "_sql_stat1"("tbl","idx","stat")
-          VALUES('t1','t1bc','12345 3 2 x=5 sz=10 y=10'),
-                ('t1','t1db','12345 3 2 whatever sz=20 junk');
+        INSERT INTO "_sql_stat1"("space_id","index_id","stat")
+          VALUES(%i,%i,'12345 3 2 x=5 sz=10 y=10'),
+                (%i,%i,'12345 3 2 whatever sz=20 junk');
         ANALYZE;
         SELECT count(b) FROM t1;
-    ]], {
+    ]], t1.id, t1.index['T1BC'].id, t1.id, t1.index['T1DB'].id), {
         -- <5.0>
         6
         -- </5.0>
@@ -253,12 +266,12 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     5.2,
-    [[
+    string.format([[
         DELETE FROM "_sql_stat1";
-        INSERT INTO "_sql_stat1"("tbl","idx","stat") VALUES('t1','t1db','12345 3 2 x=5 sz=10 y=10'), ('t1','t1bc','12345 3 2 whatever sz=20 junk');
+        INSERT INTO "_sql_stat1"("space_id","index_id","stat") VALUES(%i,%i,'12345 3 2 x=5 sz=10 y=10'), (%i,%i,'12345 3 2 whatever sz=20 junk');
         ANALYZE;
         SELECT count(b) FROM t1;
-    ]], {
+    ]], t1.id, t1.index['T1BC'].id, t1.id, t1.index['T1DB'].id), {
         -- <5.2>
         6
         -- </5.2>

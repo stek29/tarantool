@@ -114,10 +114,11 @@ test:do_test(
 
         -- DISTINCT idx, sample -- lindex(test_decode(sample),0)
         -- WHERE idx='t1u' ORDER BY nlt;
-        return test:execsql([[ SELECT DISTINCT msgpack_decode("sample")
-                                 FROM "_sql_stat4"
-                                 WHERE "idx"='T1U'
-                                 ORDER BY "nlt"]])
+        return test:execsql(string.format([[
+            SELECT DISTINCT msgpack_decode("sample")
+            FROM "_sql_stat4"
+            WHERE "index_id"= %i
+            ORDER BY "nlt"]], box.space.T1.index['T1U'].id))
     end, {
         -- <analyze5-1.0>
         "alpha", "bravo", "charlie", "delta"
@@ -143,10 +144,10 @@ test:do_test(
 test:do_test(
     "analyze5-1.2",
     function()
-        return test:execsql([[SELECT "idx", count(*) FROM "_sql_stat4" GROUP BY 1 ORDER BY 1]])
+        return test:execsql([[SELECT "index_id", count(*) FROM "_sql_stat4" GROUP BY 1 ORDER BY 1]])
     end, {
         -- <analyze5-1.2>
-        "T1",24,"T1T",4,"T1U",4,"T1V",1,"T1W",4,"T1X",4,"T1Y",2,"T1Z",4
+        0,24,1,4,2,4,3,1,4,4,5,4,6,2,7,4
         -- </analyze5-1.2>
     })
 

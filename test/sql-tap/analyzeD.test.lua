@@ -153,9 +153,9 @@ test:do_catchsql_test(
 
 test:do_execsql_test(
 	"analyzeD-1.10",
-	[[
-		SELECT * FROM "_sql_stat4" WHERE "tbl" = 'v';
-	]], {
+	string.format([[
+		SELECT * FROM "_sql_stat4" WHERE "space_id" = %i;
+	]], box.space.V.id), {
 		-- <analyzeD-1.10>
 		
 		-- <analyzeD-1.10>
@@ -163,9 +163,9 @@ test:do_execsql_test(
 
 test:do_execsql_test(
 	"analyzeD-1.11",
-	[[
-		SELECT * FROM "_sql_stat1" WHERE "tbl" = 'v';
-	]], {
+	string.format([[
+		SELECT * FROM "_sql_stat1" WHERE "space_id" = %i;
+	]], box.space.V.id), {
 		-- <analyzeD-1.11>
 		
 		-- <analyzeD-1.11>
@@ -183,9 +183,9 @@ test:do_catchsql_test(
 
 test:do_execsql_test(
 	"analyzeD-1.13",
-	[[
-		SELECT * FROM "_sql_stat4" WHERE "tbl" = 'v';
-	]], {
+	string.format([[
+		SELECT * FROM "_sql_stat4" WHERE "space_id" = %i;
+	]], box.space.V.id), {
 		-- <analyzeD-1.13>
 		
 		-- <analyzeD-1.13>
@@ -193,9 +193,9 @@ test:do_execsql_test(
 
 test:do_execsql_test(
 	"analyzeD-1.14",
-	[[
-		SELECT * FROM "_sql_stat1" WHERE "tbl" = 'v';
-	]], {
+	string.format([[
+		SELECT * FROM "_sql_stat1" WHERE "space_id" = %i;
+	]], box.space.V.id), {
 		-- <analyzeD-1.14>
 		
 		-- <analyzeD-1.14>

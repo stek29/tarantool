@@ -38,8 +38,8 @@
  *
  * The following system tables are or have been supported:
  *
- *    CREATE TABLE _sql_stat1(tbl, idx, stat);
- *    CREATE TABLE _sql_stat4(tbl, idx, nEq, nLt, nDLt, sample);
+ *    CREATE TABLE _sql_stat1(space_id, index_id, stat);
+ *    CREATE TABLE _sql_stat4(space_id, index_id, nEq, nLt, nDLt, sample);
  *
  * For most applications, _sql_stat1 provides all the statistics required
  * for the query planner to make good choices.
@@ -47,7 +47,7 @@
  * Format of _sql_stat1:
  *
  * There is normally one row per index, with the index identified by the
- * name in the idx column.  The tbl column is the name of the table to
+ * id in the index_id column.  The space_id column is the id of the space to
  * which the index belongs.  In each such row, the stat column will be
  * a string consisting of a list of integers.  The first integer in this
  * list is the number of rows in the index.  (This is the same as the
@@ -66,9 +66,9 @@
  * "unordered" keyword is present, then the query planner assumes that
  * the index is unordered and will not use the index for a range query.
  *
- * If the _sql_stat1.idx column is NULL, then the _sql_stat1.stat
+ * If the _sql_stat1.index_id column is NULL, then the _sql_stat1.stat
  * column contains a single integer which is the (estimated) number of
- * rows in the table identified by _sql_stat1.tbl.
+ * rows in the table identified by _sql_stat1.space_id.
  *
  * Format for _sql_stat4:
  *
@@ -78,9 +78,9 @@
  * queries.
  *
  * The _sql_stat4 table contains multiple entries for each index.
- * The idx column names the index and the tbl column is the table of the
- * index.  If the idx and tbl columns are the same, then the sample is
- * of the INTEGER PRIMARY KEY.  The sample column is a blob which is the
+ * The index_id column names the index and the space_id column is the space of
+ * the index. If the index_id is equal to 0, then the sample
+ * is of the INTEGER PRIMARY KEY.  The sample column is a blob which is the
  * binary encoding of a key from the index.  The nEq column is a
  * list of integers.  The first integer is the approximate number
  * of entries in the index whose left-most column exactly matches
@@ -122,10 +122,11 @@
  * created.
  *
  * @param parse Parsing context.
- * @param table_name Delete records of this table if specified.
+ * @param space_id Delete records of this table if id is not
+ *        BOX_ID_NIL.
  */
 static void
-vdbe_emit_stat_space_open(struct Parse *parse, const char *table_name)
+vdbe_emit_stat_space_open(struct Parse *parse, uint32_t space_id)
 {
 	const char *stat_names[] = {"_sql_stat1", "_sql_stat4"};
 	const uint32_t stat_ids[] = {BOX_SQL_STAT1_ID, BOX_SQL_STAT4_ID};
@@ -133,10 +134,9 @@ vdbe_emit_stat_space_open(struct Parse *parse, const char *table_name)
 	assert(v != NULL);
 	assert(sqlite3VdbeDb(v) == parse->db);
 	for (uint i = 0; i < lengthof(stat_names); ++i) {
-		const char *space_name = stat_names[i];
-		if (table_name != NULL) {
-			vdbe_emit_stat_space_clear(parse, space_name, NULL,
-						   table_name);
+		if (space_id != BOX_ID_NIL) {
+			vdbe_emit_stat_space_clear(parse, stat_names[i],
+						   space_id, BOX_ID_NIL);
 		} else {
 			sqlite3VdbeAddOp1(v, OP_Clear, stat_ids[i]);
 		}
@@ -777,10 +777,10 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 	int key_reg = ++parse->nMem;
 	/* Temporary use register. */
 	int tmp_reg = ++parse->nMem;
-	/* Register containing table name. */
-	int tab_name_reg = ++parse->nMem;
-	/* Register containing index name. */
-	int idx_name_reg = ++parse->nMem;
+	/* Register containing space id. */
+	int space_id_reg = ++parse->nMem;
+	/* Register containing index id. */
+	int index_id_reg = ++parse->nMem;
 	/* Value for the stat column of _sql_stat1. */
 	int stat1_reg = ++parse->nMem;
 	/* MUST BE LAST (see below). */
@@ -797,13 +797,13 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 	assert(space->index_count != 0);
 	struct Vdbe *v = sqlite3GetVdbe(parse);
 	assert(v != NULL);
-	const char *tab_name = space_name(space);
+	MAYBE_UNUSED const char *tab_name = space_name(space);
 	sqlite3VdbeAddOp4(v, OP_IteratorOpen, tab_cursor, 0, 0, (void *) space,
 			  P4_SPACEPTR);
-	sqlite3VdbeLoadString(v, tab_name_reg, space->def->name);
+	sqlite3VdbeAddOp2(v, OP_Integer, space->def->id, space_id_reg);
 	for (uint32_t j = 0; j < space->index_count; ++j) {
 		struct index *idx = space->index[j];
-		const char *idx_name;
+		MAYBE_UNUSED const char *idx_name;
 		/*
 		 * Primary indexes feature automatically generated
 		 * names. Thus, for the sake of clarity, use
@@ -814,8 +814,8 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 		else
 			idx_name = idx->def->name;
 		int part_count = idx->def->key_def->part_count;
-		/* Populate the register containing the index name. */
-		sqlite3VdbeLoadString(v, idx_name_reg, idx_name);
+		/* Populate the register containing the index id. */
+		sqlite3VdbeAddOp2(v, OP_Integer, idx->def->iid, index_id_reg);
 		VdbeComment((v, "Analysis for %s.%s", tab_name, idx_name));
 		/*
 		 * Pseudo-code for loop that calls stat_push():
@@ -990,9 +990,8 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 		sqlite3VdbeAddOp2(v, OP_Next, idx_cursor, next_row_addr);
 		/* Add the entry to the stat1 table. */
 		callStatGet(v, stat4_reg, STAT_GET_STAT1, stat1_reg);
-		assert("BBB"[0] == AFFINITY_TEXT);
-		sqlite3VdbeAddOp4(v, OP_MakeRecord, tab_name_reg, 3, tmp_reg,
-				  "BBB", 0);
+		sqlite3VdbeAddOp4(v, OP_MakeRecord, space_id_reg, 3, tmp_reg,
+				  "DDB", 0);
 		sqlite3VdbeAddOp4(v, OP_IdxInsert, tmp_reg, 0, 0,
 				  (char *)stat1, P4_SPACEPTR);
 		/* Add the entries to the stat4 table. */
@@ -1026,7 +1025,7 @@ vdbe_emit_analyze_space(struct Parse *parse, struct space *space)
 		}
 		sqlite3VdbeAddOp3(v, OP_MakeRecord, col_reg, part_count,
 				  sample_reg);
-		sqlite3VdbeAddOp3(v, OP_MakeRecord, tab_name_reg, 6, tmp_reg);
+		sqlite3VdbeAddOp3(v, OP_MakeRecord, space_id_reg, 6, tmp_reg);
 		sqlite3VdbeAddOp4(v, OP_IdxReplace, tmp_reg, 0, 0,
 				  (char *)stat4, P4_SPACEPTR);
 		/* P1==1 for end-of-loop. */
@@ -1067,7 +1066,7 @@ static void
 sql_analyze_database(struct Parse *parser)
 {
 	sql_set_multi_write(parser, false);
-	vdbe_emit_stat_space_open(parser, NULL);
+	vdbe_emit_stat_space_open(parser, BOX_ID_NIL);
 	space_foreach(sql_space_foreach_analyze, (void *)parser);
 	loadAnalysis(parser);
 }
@@ -1088,7 +1087,7 @@ vdbe_emit_analyze_table(struct Parse *parse, struct space *space)
 	 * There are two system spaces for statistics: _sql_stat1
 	 * and _sql_stat4.
 	 */
-	vdbe_emit_stat_space_open(parse, space->def->name);
+	vdbe_emit_stat_space_open(parse, space->def->id);
 	vdbe_emit_analyze_space(parse, space);
 	loadAnalysis(parse);
 }
@@ -1224,24 +1223,14 @@ analysis_loader(void *data, int argc, char **argv, char **unused)
 	struct analysis_index_info *info = (struct analysis_index_info *) data;
 	assert(info->stats != NULL);
 	struct index_stat *stat = &info->stats[info->index_count++];
-	uint32_t space_id = box_space_id_by_name(argv[0], strlen(argv[0]));
-	if (space_id == BOX_ID_NIL)
+	uint32_t space_id = atoll(argv[0]);
+	if (space_id == 0)
 		return -1;
 	struct space *space = space_by_id(space_id);
 	assert(space != NULL);
 	struct index *index;
-	uint32_t iid = box_index_id_by_name(space_id, argv[1], strlen(argv[1]));
-	/*
-	 * Convention is if index's name matches with space's
-	 * one, then it is primary index.
-	 */
-	if (iid != BOX_ID_NIL) {
-		index = space_index(space, iid);
-	} else {
-		if (sqlite3_stricmp(argv[0], argv[1]) != 0)
-			return -1;
-		index = space_index(space, 0);
-	}
+	uint32_t iid = atoll(argv[1]);
+	index = space_index(space, iid);
 	assert(index != NULL);
 	/*
 	 * Additional field is used to describe total
@@ -1355,8 +1344,12 @@ sample_compare(const void *a, const void *b, void *arg)
  * Arguments must point to SQL statements that return
  * data equivalent to the following:
  *
- *    prepare: SELECT tbl,idx,count(*) FROM _sql_stat4 GROUP BY tbl,idx;
- *    load: SELECT tbl,idx,neq,nlt,ndlt,sample FROM _sql_stat4;
+ * prepare:
+ *     SELECT space_id,index_id,count(*) FROM _sql_stat4
+ *     GROUP BY space_id,index_id;
+ * load:
+ *     SELECT space_id,index_id,neq,nlt,ndlt,sample
+ *     FROM _sql_stat4;
  *
  * 'prepare' statement is used to allocate enough memory for
  * statistics (i.e. arrays lt, dt, dlt and avg_eq). 'load' query
@@ -1388,27 +1381,14 @@ load_stat_from_space(struct sqlite3 *db, const char *sql_select_prepare,
 		goto finalize;
 	uint32_t current_idx_count = 0;
 	while (sqlite3_step(stmt) == SQLITE_ROW) {
-		const char *space_name = (char *)sqlite3_column_text(stmt, 0);
-		if (space_name == NULL)
-			continue;
-		const char *index_name = (char *)sqlite3_column_text(stmt, 1);
-		if (index_name == NULL)
-			continue;
-		uint32_t sample_count = sqlite3_column_int(stmt, 2);
-		uint32_t space_id = box_space_id_by_name(space_name,
-							 strlen(space_name));
-		assert(space_id != BOX_ID_NIL);
+		uint32_t space_id = sqlite3_column_int(stmt, 0);
+		assert(space_id != 0);
 		struct space *space = space_by_id(space_id);
 		assert(space != NULL);
-		struct index *index;
-		uint32_t iid = box_index_id_by_name(space_id, index_name,
-						    strlen(index_name));
-		if (sqlite3_stricmp(space_name, index_name) == 0 &&
-		    iid == BOX_ID_NIL)
-			index = space_index(space, 0);
-		else
-			index = space_index(space, iid);
+		uint32_t iid = sqlite3_column_int(stmt, 1);
+		struct index *index = space_index(space, iid);
 		assert(index != NULL);
+		uint32_t sample_count = sqlite3_column_int(stmt, 2);
 		uint32_t column_count = index->def->key_def->part_count;
 		struct index_stat *stat = &stats[current_idx_count];
 		stat->sample_field_count = column_count;
@@ -1460,27 +1440,12 @@ load_stat_from_space(struct sqlite3 *db, const char *sql_select_prepare,
 	struct index *prev_index = NULL;
 	current_idx_count = 0;
 	while (sqlite3_step(stmt) == SQLITE_ROW) {
-		const char *space_name = (char *)sqlite3_column_text(stmt, 0);
-		if (space_name == NULL)
-			continue;
-		const char *index_name = (char *)sqlite3_column_text(stmt, 1);
-		if (index_name == NULL)
-			continue;
-		uint32_t space_id = box_space_id_by_name(space_name,
-							 strlen(space_name));
-		assert(space_id != BOX_ID_NIL);
+		uint32_t space_id = sqlite3_column_int(stmt, 0);
+		assert(space_id != 0);
 		struct space *space = space_by_id(space_id);
 		assert(space != NULL);
-		struct index *index;
-		uint32_t iid = box_index_id_by_name(space_id, index_name,
-						    strlen(index_name));
-		if (iid != BOX_ID_NIL) {
-			index = space_index(space, iid);
-		} else {
-			if (sqlite3_stricmp(space_name, index_name) != 0)
-				return -1;
-			index = space_index(space, 0);
-		}
+		uint32_t iid = sqlite3_column_int(stmt, 1);
+		struct index *index = space_index(space, iid);
 		assert(index != NULL);
 		uint32_t column_count = index->def->key_def->part_count;
 		if (index != prev_index) {
@@ -1544,28 +1509,13 @@ load_stat_to_index(struct sqlite3 *db, const char *sql_select_load,
 		return -1;
 	uint32_t current_idx_count = 0;
 	while (sqlite3_step(stmt) == SQLITE_ROW) {
-		const char *space_name = (char *)sqlite3_column_text(stmt, 0);
-		if (space_name == NULL)
-			continue;
-		const char *index_name = (char *)sqlite3_column_text(stmt, 1);
-		if (index_name == NULL)
-			continue;
-		uint32_t space_id = box_space_id_by_name(space_name,
-							 strlen(space_name));
-		if (space_id == BOX_ID_NIL)
+		uint32_t space_id = sqlite3_column_int(stmt, 0);
+		if (space_id == 0)
 			return -1;
 		struct space *space = space_by_id(space_id);
 		assert(space != NULL);
-		struct index *index;
-		uint32_t iid = box_index_id_by_name(space_id, index_name,
-						    strlen(index_name));
-		if (iid != BOX_ID_NIL) {
-			index = space_index(space, iid);
-		} else {
-			if (sqlite3_stricmp(space_name, index_name) != 0)
-				return -1;
-			index = space_index(space, 0);
-		}
+		uint32_t iid = sqlite3_column_int(stmt, 1);
+		struct index *index = space_index(space, iid);
 		assert(index != NULL);
 		free(index->def->opts.stat);
 		index->def->opts.stat = stats[current_idx_count++];
@@ -1708,7 +1658,7 @@ sql_analysis_load(struct sqlite3 *db)
 	info.stats = stats;
 	info.index_count = 0;
 	const char *load_stat1 =
-		"SELECT \"tbl\",\"idx\",\"stat\" FROM \"_sql_stat1\"";
+		"SELECT \"space_id\",\"index_id\",\"stat\" FROM \"_sql_stat1\"";
 	/* Load new statistics out of the _sql_stat1 table. */
 	if (sqlite3_exec(db, load_stat1, analysis_loader, &info, 0) != 0)
 		goto fail;
@@ -1721,10 +1671,10 @@ sql_analysis_load(struct sqlite3 *db)
 	 * statistics. Result rows are given in a form:
 	 * <table name>, <index name>, <count of samples>
 	 */
-	const char *init_query = "SELECT \"tbl\",\"idx\",count(*) FROM "
-				 "\"_sql_stat4\" GROUP BY \"tbl\",\"idx\"";
+	const char *init_query = "SELECT \"space_id\",\"index_id\",count(*) FROM "
+				 "\"_sql_stat4\" GROUP BY \"space_id\",\"index_id\"";
 	/* Query for loading statistics into in-memory structs. */
-	const char *load_query = "SELECT \"tbl\",\"idx\",\"neq\",\"nlt\","
+	const char *load_query = "SELECT \"space_id\",\"index_id\",\"neq\",\"nlt\","
 				 "\"ndlt\",\"sample\" FROM \"_sql_stat4\"";
 	/* Load the statistics from the _sql_stat4 table. */
 	if (load_stat_from_space(db, init_query, load_query, stats) != 0)
@@ -1768,8 +1718,8 @@ sql_analysis_load(struct sqlite3 *db)
 	 * Ordered query is needed to be sure that indexes come
 	 * in the same order as in previous SELECTs.
 	 */
-	const char *order_query = "SELECT \"tbl\",\"idx\" FROM "
-				  "\"_sql_stat4\" GROUP BY \"tbl\",\"idx\"";
+	const char *order_query = "SELECT \"space_id\",\"index_id\" FROM "
+				  "\"_sql_stat4\" GROUP BY \"space_id\",\"index_id\"";
 	if (load_stat_to_index(db, order_query, heap_stats) != 0)
 		goto fail;
 	if (box_txn_commit() != 0)

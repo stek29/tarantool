@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(121)
+test:plan(120)
 
 testprefix = "analyze9"
 
@@ -62,29 +62,29 @@ msgpack_decode_sample = function(txt)
 end
 
 box.internal.sql_create_function("msgpack_decode_sample", msgpack_decode_sample)
+t1 = box.space.T1
 
 test:do_execsql_test(
     1.2,
-    [[
-        SELECT "tbl","idx","neq","nlt","ndlt",msgpack_decode_sample("sample") FROM "_sql_stat4" where "idx" = 'I1';
-    ]], {
+    string.format([[
+        SELECT "index_id","neq","nlt","ndlt",msgpack_decode_sample("sample") FROM "_sql_stat4" where "index_id" = %i;
+    ]], t1.index['I1'].id), {
         -- <1.2>
-        "T1", "I1", "1 1", "0 0", "0 0", "(0) (0)", "T1", "I1", "1 1", "1 1", "1 1", "(1) (1)", 
-        "T1", "I1", "1 1", "2 2", "2 2", "(2) (2)", "T1", "I1", "1 1", "3 3", "3 3", "(3) (3)", 
-        "T1", "I1", "1 1", "4 4", "4 4", "(4) (4)"
+        1, "1 1", "0 0", "0 0", "(0) (0)", 1, "1 1", "1 1", "1 1", "(1) (1)",
+        1, "1 1", "2 2", "2 2", "(2) (2)", 1, "1 1", "3 3", "3 3", "(3) (3)",
+        1, "1 1", "4 4", "4 4", "(4) (4)"
         -- </1.2>
     })
 
 test:do_execsql_test(
     1.3,
-    [[
-        SELECT "tbl","idx","neq","nlt","ndlt",msgpack_decode_sample("sample") FROM "_sql_stat4" where "idx" = 'T1';
-
-    ]], {
+    string.format([[
+        SELECT "index_id","neq","nlt","ndlt",msgpack_decode_sample("sample") FROM "_sql_stat4" where "index_id" = %i;
+    ]], t1.index[0].id), {
         -- <1.3>
-        'T1', 'T1', '1', '0', '0', '(0)', 'T1', 'T1', '1', '1', '1', '(1)', 
-        'T1', 'T1', '1', '2', '2', '(2)', 'T1', 'T1', '1', '3', '3', '(3)', 
-        'T1', 'T1', '1', '4', '4', '(4)'
+        0, '1', '0', '0', '(0)', 0, '1', '1', '1', '(1)',
+        0, '1', '2', '2', '(2)', 0, '1', '3', '3', '(3)',
+        0, '1', '4', '4', '(4)'
         -- </1.3>
     })
 
@@ -101,10 +101,10 @@ test:do_execsql_test(
         INSERT INTO t1 VALUES(22.0, 'some text');
         CREATE INDEX i1 ON t1(a, b);
         ANALYZE;
-        SELECT msgpack_decode_sample("sample") FROM "_sql_stat4";
+        SELECT msgpack_decode_sample("sample") FROM "_sql_stat4" ORDER BY 1;
     ]], {
         -- <2.1>
-        "some text 14", "22 some text", "some text", 22
+        22, "22 some text", "some text", "some text 14"
         -- </2.1>
     })
 
@@ -116,6 +116,7 @@ test:do_execsql_test(
         CREATE TABLE t2(id INTEGER PRIMARY KEY AUTOINCREMENT, a, b);
         CREATE INDEX i2 ON t2(a, b);
     ]])
+t2 = box.space.T2
 
 test:do_test(
     3.2,
@@ -184,10 +185,10 @@ test:do_execsql_test(
 --      
 test:do_execsql_test(
     "3.3.2",
-    [[
+    string.format([[
         ANALYZE;
-        SELECT lrange("neq", 1, 1) FROM "_sql_stat4" WHERE "idx" = 'I2';
-    ]], generate_tens_str(24))
+        SELECT lrange("neq", 1, 1) FROM "_sql_stat4" WHERE "space_id" = %i and "index_id" = %i;
+    ]], t2.id, t2.index['I2'].id) , generate_tens_str(24))
 
 ---------------------------------------------------------------------------
 -- 
@@ -232,6 +233,7 @@ test:do_execsql_test(
         CREATE TABLE t1(id INTEGER PRIMARY KEY AUTOINCREMENT, a, b, c);
         CREATE INDEX i1 ON t1(c, b, a);
     ]])
+t1 = box.space.T1
 
 insert_filler_rows_n = function(iStart, nCopy, nVal)
     for i = 0, nVal-1 do
@@ -282,10 +284,10 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     4.3,
-    [[
+    string.format([[
         SELECT "neq", lrange("nlt", 1, 3), lrange("ndlt", 1, 3), lrange(msgpack_decode_sample("sample"), 1, 3) 
-            FROM "_sql_stat4" WHERE "idx" = 'I1' ORDER BY "sample" LIMIT 16;
-    ]], {
+            FROM "_sql_stat4" WHERE "space_id" = %i and "index_id" = %i ORDER BY "sample" LIMIT 16;
+    ]], t1.id, t1.index['I1'].id), {
         -- <4.3>
         "10 10 10","0 0 0","0 0 0","0 0 0","10 10 10","10 10 10","1 1 1","1 1 1","10 10 10","20 20 20",
         "2 2 2","2 2 2","10 10 10","30 30 30","3 3 3","3 3 3","10 10 10","40 40 40","4 4 4","4 4 4",
@@ -299,10 +301,10 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     4.4,
-    [[
+    string.format([[
         SELECT "neq", lrange("nlt", 1, 3), lrange("ndlt", 1, 3), lrange(msgpack_decode_sample("sample"), 1, 3) 
-        FROM "_sql_stat4" WHERE "idx" = 'I1' ORDER BY "sample" DESC LIMIT 2;
-    ]], {
+        FROM "_sql_stat4" WHERE "space_id" = %i and "index_id" = %i ORDER BY "sample" DESC LIMIT 2;
+    ]], t1.id, t1.index['I1'].id), {
         -- <4.4>
         "2 1 1","295 296 296","120 122 125","201 4 h","5 3 1","290 290 291","119 119 120","200 1 b"
         -- </4.4>
@@ -364,11 +366,12 @@ test:do_test(
 test:do_execsql_test(
     4.9,
     [[
-        SELECT msgpack_decode_sample("sample") FROM "_sql_stat4";
+        SELECT msgpack_decode_sample("sample") FROM "_sql_stat4" ORDER BY 1;
     ]], {
         -- <4.9>
-        "x", 1110, 2230, 2750, 3350, 4090, 4470, 4980, 5240, 5280, 5290, 5590, 5920, 
-        5930, 6220, 6710, 7000, 7710, 7830, 7970, 8890, 8950, 9240, 9250, 9680
+        1110, 2230, 2750, 3350, 4090, 4470, 4980, 5240, 5280, 5290, 5590, 5920,
+        5930, 6220, 6710, 7000, 7710, 7830, 7970, 8890, 8950, 9240, 9250, 9680,
+        "x"
         -- </4.9>
     })
 
@@ -394,6 +397,8 @@ test:do_execsql_test(
         INSERT INTO "_sql_stat4" SELECT * FROM x1;
         ANALYZE;
     ]])
+t1 = box.space.T1
+x1 = box.space.X1
 
 test:do_execsql_test(
     6.2,
@@ -407,7 +412,7 @@ test:do_execsql_test(
 --
 test:do_execsql_test(
     7.1,
-    [[
+    string.format([[
         DROP TABLE IF EXISTS t1;
         CREATE TABLE t1(id INTEGER PRIMARY KEY AUTOINCREMENT, a, b);
         CREATE INDEX i1 ON t1(a, b);
@@ -418,9 +423,9 @@ test:do_execsql_test(
         INSERT INTO t1 VALUES(null, 5, 5);
         ANALYZE;
         UPDATE "_sql_stat4" SET "sample" = '' WHERE "sample" =
-            (SELECT "sample" FROM "_sql_stat4" WHERE "tbl" = 't1' AND "idx" = 'i1' LIMIT 1);
+            (SELECT "sample" FROM "_sql_stat4" WHERE "space_id" = %i AND "index_id" = %i LIMIT 1);
         ANALYZE;
-    ]])
+    ]], t1.id, t1.index['I1'].id))
 
 -- Doesn't work due to the fact that in Tarantool rowid has been removed,
 -- and tbl, idx and sample have been united into primary key.
@@ -1014,15 +1019,15 @@ test:do_execsql_test(
 --
 test:do_execsql_test(
     15.1,
-    [[
+    string.format([[
         DROP TABLE IF EXISTS x1;
         CREATE TABLE x1(a PRIMARY KEY, b, UNIQUE(a, b));
         INSERT INTO x1 VALUES(1, 2);
         INSERT INTO x1 VALUES(3, 4);
         INSERT INTO x1 VALUES(5, 6);
         ANALYZE;
-        INSERT INTO "_sql_stat4" VALUES('x1', 'abc', '', '', '', '');
-    ]])
+        INSERT INTO "_sql_stat4" VALUES(%i, 12345, '', '', '', '');
+    ]], x1.id))
 
 test:do_execsql_test(
     15.2,
@@ -1037,7 +1042,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     15.3,
     [[
-        INSERT INTO "_sql_stat4" VALUES('42', '42', '42', '42', '42', 42);
+        INSERT INTO "_sql_stat4" VALUES(42, 42, '42', '42', '42', 42);
     ]])
 
 test:do_execsql_test(
@@ -1054,7 +1059,7 @@ test:do_execsql_test(
     15.7,
     [[
         ANALYZE;
-        UPDATE "_sql_stat1" SET "tbl" = 'no such tbl';
+        UPDATE "_sql_stat1" SET "space_id" = "space_id" + 123456;
     ]])
 
 test:do_execsql_test(
@@ -1065,25 +1070,6 @@ test:do_execsql_test(
         -- <15.8>
         1, 2, 3, 4, 5, 6
         -- </15.8>
-    })
-
--- Tarantool: this test seems to be useless. There's no reason
--- for these fields to be nullable.
--- test:do_execsql_test(
---    15.9,
---    [[
---        ANALYZE;
---        UPDATE "_sql_stat4" SET "neq" = NULL, "nlt" = NULL, "ndlt" = NULL;
---    ]])
-
-test:do_execsql_test(
-    15.10,
-    [[
-        SELECT * FROM x1;
-    ]], {
-        -- <15.10>
-        1, 2, 3, 4, 5, 6
-        -- </15.10>
     })
 
 -- This is just for coverage....
@@ -1135,6 +1121,7 @@ test:do_test(
         -- <17.1>
         -- </17.1>
     })
+t1 = box.space.T1
 
 test:do_execsql_test(
     17.2,
@@ -1197,7 +1184,7 @@ test:do_test(
             test:execsql(string.format("INSERT INTO t1 VALUES(%s, 0);", i))
         end
         test:execsql("ANALYZE")
-        return test:execsql([[ SELECT count(*) FROM "_sql_stat4" WHERE "idx" = 'I1'; ]])
+        return test:execsql(string.format('SELECT count(*) FROM "_sql_stat4" WHERE "space_id" = %i AND "index_id" = %i;', box.space.T1.id, box.space.T1.index['I1'].id))
     end, {
         -- <18.1>
         9
@@ -1239,12 +1226,13 @@ test:do_execsql_test(
         -- </20.2>
     })
 
+t1 = box.space.T1
 for i = 0, 15 do
     test:do_test(
         "20.3."..i,
         function()
             return test:execsql(string.format(
-                [[SELECT count(*) FROM "_sql_stat4" WHERE "idx" = 'I1' AND lrange(msgpack_decode_sample("sample"), 1, 1) = '%s']], i))
+                [[SELECT count(*) FROM "_sql_stat4" WHERE "space_id" = %i AND "index_id" = %i AND lrange(msgpack_decode_sample("sample"), 1, 1) = '%s']], t1.id, t1.index['I1'].id, i))
         end, {
             1
         })
