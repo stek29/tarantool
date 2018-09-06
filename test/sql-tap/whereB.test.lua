@@ -357,14 +357,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-4.4",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-4.4>
-    
+    1, 2, 1
     -- </whereB-4.4>
     })
 
@@ -393,14 +393,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-4.102",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-4.102>
-    
+    1, 2, 1
     -- </whereB-4.102>
     })
 
@@ -457,14 +457,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-5.4",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-5.4>
-    
+    1, 2, 1
     -- </whereB-5.4>
     })
 
@@ -493,14 +493,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-5.102",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-5.102>
-    
+    1, 2, 1
     -- </whereB-5.102>
     })
 
@@ -557,14 +557,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-6.4",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-6.4>
-    
+    1, 2, 1
     -- </whereB-6.4>
     })
 
@@ -593,14 +593,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-6.102",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-6.102>
-    
+    1, 2, 1
     -- </whereB-6.102>
     })
 
@@ -657,14 +657,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-7.4",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-7.4>
-    
+    1, 2, 1
     -- </whereB-7.4>
     })
 
@@ -693,14 +693,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-7.102",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-7.102>
-    
+    1, 2, 1
     -- </whereB-7.102>
     })
 
@@ -757,14 +757,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-8.4",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-8.4>
-    
+    1, 2, 1
     -- </whereB-8.4>
     })
 
@@ -793,14 +793,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-8.102",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-8.102>
-    
+    1, 2, 1
     -- </whereB-8.102>
     })
 
@@ -857,14 +857,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-9.4",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-9.4>
-    
+    1, 2, 1
     -- </whereB-9.4>
     })
 
@@ -893,14 +893,14 @@ test:do_execsql_test(
 
 test:do_execsql_test(
     "whereB-9.102",
-    -- In this case the unary "+" operator removes the column affinity so
-    -- the columns compare false
+    -- In this case the unary "+" operator shouldn't
+    -- affect result set of query.
     [[
         SELECT x, a, y=b FROM t1, t2 WHERE +y=+b;
     ]],
     {
     -- <whereB-9.102>
-    
+    1, 2, 1
     -- </whereB-9.102>
     })
 
