@@ -1,5 +1,6 @@
 env = require('test_run')
 test_run = env.new()
+test_run:cmd("restart server default with cleanup=1")
 space = box.schema.space.create('tweedledum')
 index1 = space:create_index('primary', { type ='hash', parts = {1, 'string'}, unique = true })
 index2 = space:create_index('secondary', { type = 'tree', parts = {2, 'unsigned'}, unique = false })

@@ -4,6 +4,7 @@
 -- Snapshots are made every snapshot_interval seconds and then checked for consistency
 env = require('test_run')
 test_run = env.new()
+test_run:cmd("restart server default with cleanup=1")
 -- Settings: You may increase theese value to make test longer
 -- number of worker fibers:
 workers_count = 80
