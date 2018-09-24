@@ -42,6 +42,71 @@ static const struct tuple_field tuple_field_default = {
 };
 
 /**
+ * Add and initialize a new key_part to format.
+ * @param format Format to initialize.
+ * @param fields Fields definition if any.
+ * @param fields_count Count of @fields.
+ * @param part An index part to append.
+ * @param is_sequential Does this part sequential.
+ * @param current_slot Pointer to last offset slot.
+ * @retval -1 On error.
+ * @retval 0 On success.
+ */
+static int
+tuple_format_add_key_part(struct tuple_format *format,
+			  const struct field_def *fields, uint32_t field_count,
+			  const struct key_part *part, bool is_sequential,
+			  int *current_slot)
+{
+	assert(part->fieldno < format->field_count);
+	struct tuple_field *field = &format->fields[part->fieldno];
+	if (part->fieldno >= field_count) {
+		field->is_nullable = part->is_nullable;
+	} else if (field->is_nullable != part->is_nullable) {
+		/*
+		 * In case of mismatch set the most strict option
+		 * for is_nullable.
+		 */
+		field->is_nullable = false;
+	}
+	/*
+	 * Check that there are no conflicts between index part
+	 * types and space fields. If a part type is compatible
+	 * with field's one, then the part type is more strict
+	 * and the part type must be used in tuple_format.
+	 */
+	if (field_type1_contains_type2(field->type, part->type)) {
+		field->type = part->type;
+	} else if (!field_type1_contains_type2(part->type, field->type)) {
+		int fieldno = part->fieldno + TUPLE_INDEX_BASE;
+		const char *name = part->fieldno >= field_count ?
+				   tt_sprintf("%d", fieldno) :
+				   tt_sprintf("'%s'",
+					      fields[part->fieldno].name);
+		int errcode = !field->is_key_part ?
+			      ER_FORMAT_MISMATCH_INDEX_PART :
+			      ER_INDEX_PART_TYPE_MISMATCH;
+		diag_set(ClientError, errcode, name,
+			 field_type_strs[field->type],
+			 field_type_strs[part->type]);
+		return -1;
+	}
+	field->is_key_part = true;
+	/*
+	 * In the tuple, store only offsets necessary to access
+	 * fields of non-sequential keys.
+	 * First field is always simply accessible, so we don't
+	 * store an offset for it.
+	 */
+	if (field->offset_slot == TUPLE_OFFSET_SLOT_NIL && !is_sequential &&
+	    part->fieldno > 0) {
+		*current_slot = *current_slot - 1;
+		field->offset_slot = *current_slot;
+	}
+	return 0;
+}
+
+/**
  * Extract all available type info from keys and field
  * definitions.
  */
@@ -78,63 +143,11 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 		const struct key_part *parts_end = part + key_def->part_count;
 
 		for (; part < parts_end; part++) {
-			assert(part->fieldno < format->field_count);
-			struct tuple_field *field =
-				&format->fields[part->fieldno];
-			if (part->fieldno >= field_count) {
-				field->is_nullable = part->is_nullable;
-			} else if (field->is_nullable != part->is_nullable) {
-				/*
-				 * In case of mismatch set the most
-				 * strict option for is_nullable.
-				 */
-				field->is_nullable = false;
-			}
-
-			/*
-			 * Check that there are no conflicts
-			 * between index part types and space
-			 * fields. If a part type is compatible
-			 * with field's one, then the part type is
-			 * more strict and the part type must be
-			 * used in tuple_format.
-			 */
-			if (field_type1_contains_type2(field->type,
-						       part->type)) {
-				field->type = part->type;
-			} else if (! field_type1_contains_type2(part->type,
-								field->type)) {
-				const char *name;
-				int fieldno = part->fieldno + TUPLE_INDEX_BASE;
-				if (part->fieldno >= field_count) {
-					name = tt_sprintf("%d", fieldno);
-				} else {
-					const struct field_def *def =
-						&fields[part->fieldno];
-					name = tt_sprintf("'%s'", def->name);
-				}
-				int errcode;
-				if (! field->is_key_part)
-					errcode = ER_FORMAT_MISMATCH_INDEX_PART;
-				else
-					errcode = ER_INDEX_PART_TYPE_MISMATCH;
-				diag_set(ClientError, errcode, name,
-					 field_type_strs[field->type],
-					 field_type_strs[part->type]);
+			if (tuple_format_add_key_part(format, fields,
+						      field_count, part,
+						      is_sequential,
+						      &current_slot) != 0)
 				return -1;
-			}
-			field->is_key_part = true;
-			/*
-			 * In the tuple, store only offsets necessary
-			 * to access fields of non-sequential keys.
-			 * First field is always simply accessible,
-			 * so we don't store an offset for it.
-			 */
-			if (field->offset_slot == TUPLE_OFFSET_SLOT_NIL &&
-			    is_sequential == false && part->fieldno > 0) {
-
-				field->offset_slot = --current_slot;
-			}
 		}
 	}
 
