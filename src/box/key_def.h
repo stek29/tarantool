@@ -301,12 +301,10 @@ key_def_decode_parts_160(struct key_part_def *parts, uint32_t part_count,
 			 const char **data, const struct field_def *fields,
 			 uint32_t field_count);
 
-/**
- * Returns the part in index_def->parts for the specified fieldno.
- * If fieldno is not in index_def->parts returns NULL.
- */
-const struct key_part *
-key_def_find(const struct key_def *key_def, uint32_t fieldno);
+/** Check if @a key_def contains @a to_find part. */
+bool
+key_def_contains_part(const struct key_def *key_def,
+		      const struct key_part *to_find);
 
 /**
  * Check if key definition @a first contains all parts of
