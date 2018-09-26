@@ -201,6 +201,21 @@ future4:wait_result()
 cn:close()
 box.sql.execute('drop table test')
 
+-- gh-2618 Return generated columns after INSERT in IPROTO.
+-- Return all ids generated in current INSERT statement.
+box.sql.execute('create table test (id integer primary key autoincrement, a integer)')
+cn = remote.connect(box.cfg.listen)
+cn:execute('insert into test values (1, 1)')
+cn:execute('insert into test values (null, 2)')
+cn:execute('update test set a = 11 where id == 1')
+cn:execute('insert into test values (100, 1), (null, 1), (120, 1), (null, 1)')
+cn:execute('insert into test values (null, 1), (null, 1), (null, 1), (null, 1), (null, 1)')
+cn:execute('select * from test')
+cn:execute('create table test2 (id integer primary key, a integer)')
+cn:execute('drop table test2')
+cn:close()
+box.sql.execute('drop table test')
+
 box.schema.user.revoke('guest', 'read,write,execute', 'universe')
 space = nil
 

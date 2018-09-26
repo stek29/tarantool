@@ -368,6 +368,9 @@ struct Vdbe {
 	/** The auto-commit flag. */
 	bool auto_commit;
 
+	/** List of id generated in current VDBE. */
+	struct stailq generated_ids;
+
 	/* When allocating a new Vdbe object, all of the fields below should be
 	 * initialized to zero or NULL
 	 */

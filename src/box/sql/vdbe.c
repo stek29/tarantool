@@ -578,6 +578,26 @@ out2Prerelease(Vdbe *p, VdbeOp *pOp)
 	}
 }
 
+struct stailq *
+vdbe_generated_ids(struct Vdbe *vdbe)
+{
+	return &vdbe->generated_ids;
+}
+
+int
+vdbe_add_new_generated_id(struct Vdbe *vdbe, int64_t id)
+{
+	assert(vdbe != NULL);
+	struct id_entry *id_entry = region_alloc(&fiber()->gc, sizeof(*id_entry));
+	if (id_entry == NULL) {
+		diag_set(OutOfMemory, sizeof(*id_entry), "region_alloc", "id_entry");
+		return -1;
+	}
+	id_entry->id = id;
+	stailq_add_tail_entry(vdbe_generated_ids(vdbe), id_entry, link);
+	return 0;
+}
+
 /*
  * Execute as much of a VDBE program as we can.
  * This is the core of sqlite3_step().
@@ -2996,7 +3016,7 @@ case OP_TransactionBegin: {
  */
 case OP_TransactionCommit: {
 	if (box_txn()) {
-		if (box_txn_commit() != 0) {
+		if (txn_commit(in_txn()) != 0) {
 			rc = SQL_TARANTOOL_ERROR;
 			goto abort_due_to_error;
 		}
@@ -3040,7 +3060,7 @@ case OP_TransactionRollback: {
  */
 case OP_TTransaction: {
 	if (!box_txn()) {
-		if (box_txn_begin() != 0) {
+		if (sql_txn_begin(p) != 0) {
 			rc = SQL_TARANTOOL_ERROR;
 			goto abort_due_to_error;
 		}

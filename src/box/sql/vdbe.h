@@ -197,6 +197,15 @@ sql_alloc_txn();
 int
 sql_vdbe_prepare(struct Vdbe *vdbe);
 
+/**
+ * Return pointer to list of generated ids.
+ *
+ * @param vdbe VDBE to get list of generated ids from.
+ * @retval List of generated ids.
+ */
+struct stailq *
+vdbe_generated_ids(struct Vdbe *vdbe);
+
 int sqlite3VdbeAddOp0(Vdbe *, int);
 int sqlite3VdbeAddOp1(Vdbe *, int, int);
 int sqlite3VdbeAddOp2(Vdbe *, int, int, int);

@@ -57,6 +57,8 @@ sqlite3VdbeCreate(Parse * pParse)
 		return 0;
 	memset(p, 0, sizeof(Vdbe));
 	p->db = db;
+	/* Init list of generated ids. */
+	stailq_create(&p->generated_ids);
 	if (db->pVdbe) {
 		db->pVdbe->pPrev = p;
 	}
@@ -106,6 +108,7 @@ sql_vdbe_prepare(struct Vdbe *vdbe)
 			txn->psql_txn = sql_alloc_txn();
 			if (txn->psql_txn == NULL)
 				return -1;
+			txn->psql_txn->vdbe = vdbe;
 		}
 		vdbe->psql_txn = txn->psql_txn;
 	} else {
@@ -2266,6 +2269,7 @@ sql_txn_begin(Vdbe *p)
 		box_txn_rollback();
 		return -1;
 	}
+	ptxn->psql_txn->vdbe = p;
 	p->psql_txn = ptxn->psql_txn;
 	return 0;
 }
@@ -2414,9 +2418,9 @@ sqlite3VdbeHalt(Vdbe * p)
 					 * key constraints to hold up the transaction. This means a commit
 					 * is required.
 					 */
-					rc = box_txn_commit() ==
-						    0 ? SQLITE_OK :
-						    SQL_TARANTOOL_ERROR;
+					rc = (in_txn() == NULL ||
+					      txn_commit(in_txn()) == 0) ?
+					     SQLITE_OK : SQL_TARANTOOL_ERROR;
 					closeCursorsAndFree(p);
 				}
 				if (rc == SQLITE_BUSY && !p->pDelFrame) {
@@ -2780,6 +2784,8 @@ sqlite3VdbeDelete(Vdbe * p)
 	}
 	p->magic = VDBE_MAGIC_DEAD;
 	p->db = 0;
+	if (in_txn() == NULL)
+		fiber_gc();
 	sqlite3DbFree(db, p);
 }
 
