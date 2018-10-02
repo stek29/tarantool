@@ -45,15 +45,20 @@
 #include "box/iproto_constants.h" /* IPROTO_DATA */
 #include "box/field_def.h"
 #include "box/key_def.h"
+#include "box/schema_def.h"
 #include "box/tuple.h"
 #include "box/lua/tuple.h"
 #include "box/box.h"
+#include "box/index.h"
+#include "src/box/coll_id_cache.h"
 
 #ifndef NDEBUG
 #include "say.h"
 #endif /* !defined(NDEBUG) */
 
 #include "diag.h"
+
+#define BOX_COLLATION_NAME_INDEX 1
 
 /**
  * Helper macro to throw the out of memory error to Lua.
@@ -307,6 +312,24 @@ lbox_merger_next(struct lua_State *L)
 	return 1;
 }
 
+static uint32_t
+coll_id_by_name(const char *name, size_t len)
+{
+	uint32_t size = mp_sizeof_array(1) + mp_sizeof_str(len);
+	char begin[size];
+	char *end_p = mp_encode_array(begin, 1);
+	end_p = mp_encode_str(end_p, name, len);
+	box_tuple_t *tuple;
+	if (box_index_get(BOX_COLLATION_ID, BOX_COLLATION_NAME_INDEX,
+	    begin, end_p, &tuple) != 0)
+		return COLL_NONE;
+	if (tuple == NULL)
+		return COLL_NONE;
+	uint32_t result = COLL_NONE;
+	(void) tuple_field_u32(tuple, BOX_COLLATION_FIELD_ID, &result);
+	return result;
+}
+
 static int
 lbox_merger_new(struct lua_State *L)
 {
@@ -314,7 +337,8 @@ lbox_merger_new(struct lua_State *L)
 		return luaL_error(L, "Bad params, use: new({"
 				  "{fieldno = fieldno, type = type"
 				  "[, is_nullable = is_nullable"
-				  "[, collation_id = collation_id]]}, ...}");
+				  "[, collation_id = collation_id"
+				  "[, collation = collation]]]}, ...}");
 	uint16_t count = 0, capacity = 8;
 
 	const ssize_t parts_size = sizeof(struct key_part_def) * capacity;
@@ -382,7 +406,7 @@ lbox_merger_new(struct lua_State *L)
 			parts[count].is_nullable = lua_toboolean(L, -1);
 		lua_pop(L, 1);
 
-		/* Set parts[count].coll_id. */
+		/* Set parts[count].coll_id using collation_id. */
 		lua_pushstring(L, "collation_id");
 		lua_gettable(L, -2);
 		if (lua_isnil(L, -1))
@@ -391,11 +415,45 @@ lbox_merger_new(struct lua_State *L)
 			parts[count].coll_id = lua_tointeger(L, -1);
 		lua_pop(L, 1);
 
-		if (parts[count].coll_id != COLL_NONE && !box_is_configured()) {
+		/* Set parts[count].coll_id using collation. */
+		lua_pushstring(L, "collation");
+		lua_gettable(L, -2);
+		/* Check whether box.cfg{} was called. */
+		if ((parts[count].coll_id != COLL_NONE || !lua_isnil(L, -1)) &&
+		    !box_is_configured()) {
 			free(parts);
 			return luaL_error(L, "Cannot use collations: "
 					  "please call box.cfg{}");
 		}
+		if (!lua_isnil(L, -1)) {
+			if (parts[count].coll_id != COLL_NONE) {
+				free(parts);
+				return luaL_error(
+					L, "Conflicting options: collation_id "
+					"and collation");
+			}
+			size_t coll_name_len;
+			const char *coll_name = lua_tolstring(L, -1,
+							      &coll_name_len);
+			parts[count].coll_id = coll_id_by_name(coll_name,
+							       coll_name_len);
+			if (parts[count].coll_id == COLL_NONE) {
+				free(parts);
+				return luaL_error(
+					L, "Unknown collation: \"%s\"",
+					coll_name);
+			}
+		}
+		lua_pop(L, 1);
+
+		/* Check coll_id. */
+		struct coll_id *coll_id = coll_by_id(parts[count].coll_id);
+		if (parts[count].coll_id != COLL_NONE && coll_id == NULL) {
+			free(parts);
+			return luaL_error(L, "Unknown collation_id: %d",
+					  parts[count].coll_id);
+		}
+
 		++count;
 	}
 

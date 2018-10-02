@@ -156,6 +156,26 @@ local schemas = {
             end
         end,
     },
+    -- Test index part with 'collation' option (as in local index
+    -- parts).
+    {
+        name = 'collation',
+        parts = {
+            {
+                fieldno = 1,
+                type = 'string',
+                collation = 'unicode_ci',
+            },
+        },
+        gen_tuple = function(i)
+            local letters = {'a', 'b', 'c', 'A', 'B', 'C'}
+            if i <= #letters then
+                return {letters[i]}
+            else
+                return {''}
+            end
+        end,
+    },
 }
 
 local function is_unicode_ci_part(part)
@@ -301,18 +321,9 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
 end
 
 local test = tap.test('merger')
-test:plan(2 + #schemas * 2 * 6)
+test:plan(6 + #schemas * 2 * 6)
 
--- Case: try to use collations before box.cfg{}.
-local ok, err = pcall(merger.new, {{
-    fieldno = 1,
-    type = 'string',
-    collation_id = 2,
-}})
-local exp_err = 'Cannot use collations: please call box.cfg{}'
-test:is_deeply({ok, err}, {false, exp_err}, 'use collations before box.cfg{}')
-
--- Case: pass field on an unknown type.
+-- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
     fieldno = 2,
     type = 'unknown',
@@ -320,8 +331,57 @@ local ok, err = pcall(merger.new, {{
 local exp_err = 'Unknown field type: unknown'
 test:is_deeply({ok, err}, {false, exp_err}, 'incorrect field type')
 
+-- Case: try to use collation_id before box.cfg{}.
+local ok, err = pcall(merger.new, {{
+    fieldno = 1,
+    type = 'string',
+    collation_id = 2,
+}})
+local exp_err = 'Cannot use collations: please call box.cfg{}'
+test:is_deeply({ok, err}, {false, exp_err},
+    'use collation_id before box.cfg{}')
+
+-- Case: try to use collation before box.cfg{}.
+local ok, err = pcall(merger.new, {{
+    fieldno = 1,
+    type = 'string',
+    collation = 'unicode_ci',
+}})
+local exp_err = 'Cannot use collations: please call box.cfg{}'
+test:is_deeply({ok, err}, {false, exp_err},
+    'use collation before box.cfg{}')
+
 -- For collations.
 box.cfg{}
+
+-- Case: try to use both collation_id and collation.
+local ok, err = pcall(merger.new, {{
+    fieldno = 1,
+    type = 'string',
+    collation_id = 2,
+    collation = 'unicode_ci',
+}})
+local exp_err = 'Conflicting options: collation_id and collation'
+test:is_deeply({ok, err}, {false, exp_err},
+    'use collation_id and collation both')
+
+-- Case: unknown collation_id.
+local ok, err = pcall(merger.new, {{
+    fieldno = 1,
+    type = 'string',
+    collation_id = 42,
+}})
+local exp_err = 'Unknown collation_id: 42'
+test:is_deeply({ok, err}, {false, exp_err}, 'unknown collation_id')
+
+-- Case: unknown collation name.
+local ok, err = pcall(merger.new, {{
+    fieldno = 1,
+    type = 'string',
+    collation = 'unknown',
+}})
+local exp_err = 'Unknown collation: "unknown"'
+test:is_deeply({ok, err}, {false, exp_err}, 'unknown collation name')
 
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
