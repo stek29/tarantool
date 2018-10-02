@@ -91,6 +91,50 @@ local schemas = {
             return res
         end,
     },
+    -- Merger allocates a memory for 8 parts by default.
+    -- Test that reallocation works properly.
+    {
+        name = 'many_parts',
+        parts = (function()
+            local parts = {}
+            for i = 1, 128 do
+                parts[i] = {
+                    fieldno = i,
+                    type = 'unsigned',
+                }
+            end
+            return parts
+        end)(),
+        gen_tuple = function(i)
+            local tuple = {}
+            for i = 1, 128 do
+                tuple[i] = i
+            end
+            return tuple
+        end,
+    },
+    -- Test null value in nullable field of an index.
+    {
+        name = 'nullable',
+        parts = {
+            {
+                fieldno = 1,
+                type = 'unsigned',
+            },
+            {
+                fieldno = 2,
+                type = 'string',
+                is_nullable = true,
+            },
+        },
+        gen_tuple = function(i)
+            if i % 1 == 1 then
+                return {i, tostring(i)}
+            else
+                return {i, box.NULL}
+            end
+        end,
+    },
 }
 
 local function get_index_fields_position(parts)

@@ -43,9 +43,10 @@
 #include "salad/heap.h"
 
 #include "box/iproto_constants.h" /* IPROTO_DATA */
+#include "box/field_def.h"
+#include "box/key_def.h"
 #include "box/tuple.h"
 #include "box/lua/tuple.h"
-#include "box/field_def.h"
 
 #ifndef NDEBUG
 #include "say.h"
@@ -310,90 +311,98 @@ lbox_merger_new(struct lua_State *L)
 {
 	if (lua_gettop(L) != 1 || lua_istable(L, 1) != 1)
 		return luaL_error(L, "Bad params, use: new({"
-				  "{fieldno = fieldno, type = type}, ...}");
+				  "{fieldno = fieldno, type = type"
+				  "[, is_nullable = is_nullable]}, ...}");
 	uint16_t count = 0, capacity = 8;
-	uint32_t *fieldno = NULL;
-	enum field_type *type = NULL;
-	const size_t fieldno_size = sizeof(*fieldno) * capacity;
-	fieldno = (uint32_t *) malloc(fieldno_size);
-	if (fieldno == NULL)
-		throw_out_of_memory_error(L, fieldno_size, "fieldno");
-	const size_t type_size = sizeof(*type) * capacity;
-	type = (enum field_type *) malloc(type_size);
-	if (type == NULL) {
-		free(fieldno);
-		throw_out_of_memory_error(L, type_size, "type");
-	}
+
+	const ssize_t parts_size = sizeof(struct key_part_def) * capacity;
+	struct key_part_def *parts = NULL;
+	parts = (struct key_part_def *) malloc(parts_size);
+	if (parts == NULL)
+		throw_out_of_memory_error(L, parts_size, "parts");
+
 	while (true) {
 		lua_pushinteger(L, count + 1);
 		lua_gettable(L, 1);
 		if (lua_isnil(L, -1))
 			break;
+
+		/* Extend parts if necessary. */
 		if (count == capacity) {
 			capacity *= 2;
-			uint32_t *old_fieldno = fieldno;
-			const size_t fieldno_size = sizeof(*fieldno) * capacity;
-			fieldno = (uint32_t *) realloc(fieldno, fieldno_size);
-			if (fieldno == NULL) {
-				free(old_fieldno);
-				free(type);
-				throw_out_of_memory_error(L, fieldno_size,
-							  "fieldno");
-			}
-			enum field_type *old_type = type;
-			const size_t type_size = sizeof(*type) * capacity;
-			type = (enum field_type *) realloc(type, type_size);
-			if (type == NULL) {
-				free(fieldno);
-				free(old_type);
-				throw_out_of_memory_error(L, type_size, "type");
+			struct key_part_def *old_parts = parts;
+			const ssize_t parts_size =
+				sizeof(struct key_part_def) * capacity;
+			parts = (struct key_part_def *) realloc(parts,
+								parts_size);
+			if (parts == NULL) {
+				free(old_parts);
+				throw_out_of_memory_error(L, parts_size,
+							  "parts");
 			}
 		}
+
+		/* Set parts[count].fieldno. */
 		lua_pushstring(L, "fieldno");
 		lua_gettable(L, -2);
-		if (lua_isnil(L, -1))
-			break;
-		fieldno[count] = lua_tointeger(L, -1) - 1;
+		if (lua_isnil(L, -1)) {
+			free(parts);
+			return luaL_error(L, "fieldno must not be nil");
+		}
+		/* Transform one-based Lua fieldno to zero-based
+		 * C fieldno. */
+		parts[count].fieldno = lua_tointeger(L, -1) - 1;
 		lua_pop(L, 1);
+
+		/* Set parts[count].type. */
 		lua_pushstring(L, "type");
 		lua_gettable(L, -2);
-		if (lua_isnil(L, -1))
-			break;
+		if (lua_isnil(L, -1)) {
+			free(parts);
+			return luaL_error(L, "type must not be nil");
+		}
 		size_t type_len;
 		const char *type_name = lua_tolstring(L, -1, &type_len);
 		lua_pop(L, 1);
-		type[count] = field_type_by_name(type_name, type_len);
-		if (type[count] == field_type_MAX) {
-			free(fieldno);
-			free(type);
+		parts[count].type = field_type_by_name(type_name, type_len);
+		if (parts[count].type == field_type_MAX) {
+			free(parts);
 			return luaL_error(L, "Unknown field type: %s",
 					  type_name);
 		}
+
+		/* Set parts[count].is_nullable. */
+		lua_pushstring(L, "is_nullable");
+		lua_gettable(L, -2);
+		if (lua_isnil(L, -1))
+			parts[count].is_nullable = false;
+		else
+			parts[count].is_nullable = lua_toboolean(L, -1);
+		lua_pop(L, 1);
+
+		/* Set parts[count].coll_id. */
+		parts[count].coll_id = COLL_NONE;
+
 		++count;
 	}
 
 	struct merger *merger = calloc(1, sizeof(*merger));
 	if (merger == NULL) {
-		free(fieldno);
-		free(type);
+		free(parts);
 		throw_out_of_memory_error(L, sizeof(*merger), "merger");
 	}
-	merger->key_def = box_key_def_new(fieldno, type, count);
+	merger->key_def = key_def_new(parts, count);
 	if (merger->key_def == NULL) {
-		free(fieldno);
-		free(type);
-		throw_out_of_memory_error(L, sizeof(*merger->key_def),
-					  "merger->key_def");
+		free(parts);
+		return luaL_error(L, "Cannot create merger->key_def");
 	}
-	free(fieldno);
-	free(type);
+	free(parts);
 
 	merger->format = box_tuple_format_new(&merger->key_def, 1);
 	if (merger->format == NULL) {
 		box_key_def_delete(merger->key_def);
 		free(merger);
-		throw_out_of_memory_error(L, sizeof(*merger->format),
-					  "merger->format");
+		return luaL_error(L, "Cannot create merger->format");
 	}
 
 	*(struct merger **) luaL_pushcdata(L, merger_type_id) = merger;
