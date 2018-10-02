@@ -42,6 +42,18 @@ static const struct tuple_field tuple_field_default = {
 };
 
 /**
+ * Calculate the size of tuple format allocation.
+ * @param field_count Count of tuple fields.
+ * @retval Size of memory allocation.
+ */
+static inline uint32_t
+tuple_format_sizeof(uint32_t field_count)
+{
+	return sizeof(struct tuple_format) +
+	       field_count * sizeof(struct tuple_field);
+}
+
+/**
  * Add and initialize a new key_part to format.
  * @param format Format to initialize.
  * @param fields Fields definition if any.
@@ -225,8 +237,7 @@ tuple_format_alloc(struct key_def * const *keys, uint16_t key_count,
 		}
 	}
 	uint32_t field_count = MAX(space_field_count, index_field_count);
-	uint32_t total = sizeof(struct tuple_format) +
-			 field_count * sizeof(struct tuple_field);
+	uint32_t total = tuple_format_sizeof(field_count);
 
 	struct tuple_format *format = (struct tuple_format *) malloc(total);
 	if (format == NULL) {
