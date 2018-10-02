@@ -47,6 +47,7 @@
 #include "box/key_def.h"
 #include "box/tuple.h"
 #include "box/lua/tuple.h"
+#include "box/box.h"
 
 #ifndef NDEBUG
 #include "say.h"
@@ -312,7 +313,8 @@ lbox_merger_new(struct lua_State *L)
 	if (lua_gettop(L) != 1 || lua_istable(L, 1) != 1)
 		return luaL_error(L, "Bad params, use: new({"
 				  "{fieldno = fieldno, type = type"
-				  "[, is_nullable = is_nullable]}, ...}");
+				  "[, is_nullable = is_nullable"
+				  "[, collation_id = collation_id]]}, ...}");
 	uint16_t count = 0, capacity = 8;
 
 	const ssize_t parts_size = sizeof(struct key_part_def) * capacity;
@@ -381,8 +383,19 @@ lbox_merger_new(struct lua_State *L)
 		lua_pop(L, 1);
 
 		/* Set parts[count].coll_id. */
-		parts[count].coll_id = COLL_NONE;
+		lua_pushstring(L, "collation_id");
+		lua_gettable(L, -2);
+		if (lua_isnil(L, -1))
+			parts[count].coll_id = COLL_NONE;
+		else
+			parts[count].coll_id = lua_tointeger(L, -1);
+		lua_pop(L, 1);
 
+		if (parts[count].coll_id != COLL_NONE && !box_is_configured()) {
+			free(parts);
+			return luaL_error(L, "Cannot use collations: "
+					  "please call box.cfg{}");
+		}
 		++count;
 	}
 

@@ -7,6 +7,7 @@ local digest = require('digest')
 local merger = require('merger')
 local crypto = require('crypto')
 local fiber = require('fiber')
+local utf8 = require('utf8')
 
 local IPROTO_DATA = 48
 
@@ -135,27 +136,47 @@ local schemas = {
             end
         end,
     },
+    -- Test index part with 'collation_id' option (as in net.box's
+    -- response).
+    {
+        name = 'collation_id',
+        parts = {
+            {
+                fieldno = 1,
+                type = 'string',
+                collation_id = 2, -- unicode_ci
+            },
+        },
+        gen_tuple = function(i)
+            local letters = {'a', 'b', 'c', 'A', 'B', 'C'}
+            if i <= #letters then
+                return {letters[i]}
+            else
+                return {''}
+            end
+        end,
+    },
 }
 
-local function get_index_fields_position(parts)
-    local res = {}
-    for _, part in ipairs(parts) do
-        table.insert(res, part.fieldno)
-    end
-    return res
+local function is_unicode_ci_part(part)
+    return part.collation_id == 2 or part.collation == 'unicode_ci'
 end
 
-local function sort_tuples(tuples, index_field_positions)
+local function sort_tuples(tuples, parts)
     local function tuple_comparator(a, b)
-        for _, i in ipairs(index_field_positions) do
-            if a[i] ~= b[i] then
-                if a[i] == nil then
+        for _, part in ipairs(parts) do
+            local fieldno = part.fieldno
+            if a[fieldno] ~= b[fieldno] then
+                if a[fieldno] == nil then
                     return true
                 end
-                if b[i] == nil then
+                if b[fieldno] == nil then
                     return false
                 end
-                return a[i] < b[i]
+                if is_unicode_ci_part(part) then
+                    return utf8.casecmp(a[fieldno], b[fieldno]) < 0
+                end
+                return a[fieldno] < b[fieldno]
             end
         end
 
@@ -163,6 +184,20 @@ local function sort_tuples(tuples, index_field_positions)
     end
 
     table.sort(tuples, tuple_comparator)
+end
+
+local function lowercase_unicode_ci_fields(tuples, parts)
+    for i = 1, #tuples do
+        local tuple = tuples[i]
+        for _, part in ipairs(parts) do
+            if is_unicode_ci_part(part) then
+                -- Workaround #3709.
+                if tuple[part.fieldno]:len() > 0 then
+                    tuple[part.fieldno] = utf8.lower(tuple[part.fieldno])
+                end
+            end
+        end
+    end
 end
 
 local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
@@ -184,15 +219,13 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
         table.insert(exp_result, tuple)
     end
 
-    local index_field_positions = get_index_fields_position(schema.parts)
-
     -- Sort prepared tuples.
     for _, ts in pairs(tuples) do
-        sort_tuples(ts, index_field_positions)
+        sort_tuples(ts, schema.parts)
     end
 
     -- Sort expected output.
-    sort_tuples(exp_result, index_field_positions)
+    sort_tuples(exp_result, schema.parts)
 
     -- Initialize N buffers; write corresponding tuples to that buffers;
     -- that imitates netbox's select with {buffer = ...}.
@@ -249,10 +282,16 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
         table.insert(res, tuple)
     end
 
-    -- prepare for comparing
+    -- Prepare for comparing.
     for i = 1, #res do
         res[i] = res[i]:totable()
     end
+
+    -- unicode_ci does not differentiate btw 'A' and 'a', so the
+    -- order is arbitrary. We transform fields with unicode_ci
+    -- collation in parts to lower case before comparing.
+    lowercase_unicode_ci_fields(res, schema.parts)
+    lowercase_unicode_ci_fields(exp_result, schema.parts)
 
     local use_function_input_str = use_function_input and
         ' (use_function_input)' or ''
@@ -262,15 +301,29 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
 end
 
 local test = tap.test('merger')
-test:plan(1 + #schemas * 2 * 6)
+test:plan(2 + #schemas * 2 * 6)
 
+-- Case: try to use collations before box.cfg{}.
+local ok, err = pcall(merger.new, {{
+    fieldno = 1,
+    type = 'string',
+    collation_id = 2,
+}})
+local exp_err = 'Cannot use collations: please call box.cfg{}'
+test:is_deeply({ok, err}, {false, exp_err}, 'use collations before box.cfg{}')
+
+-- Case: pass field on an unknown type.
 local ok, err = pcall(merger.new, {{
     fieldno = 2,
     type = 'unknown',
 }})
-test:is_deeply({ok, err}, {false, 'Unknown field type: unknown'},
-    'incorrect field type')
+local exp_err = 'Unknown field type: unknown'
+test:is_deeply({ok, err}, {false, exp_err}, 'incorrect field type')
 
+-- For collations.
+box.cfg{}
+
+-- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
     for _, schema in ipairs(schemas) do
         local use_function_input_str = use_function_input and
