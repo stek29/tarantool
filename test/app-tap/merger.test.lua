@@ -10,6 +10,7 @@ local fiber = require('fiber')
 local utf8 = require('utf8')
 
 local IPROTO_DATA = 48
+local BATCH_SIZE = 10
 
 local schemas = {
     {
@@ -223,18 +224,23 @@ end
 local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     local opts = opts or {}
     local use_function_input = opts.use_function_input or false
+    local use_batch_input = opts.use_batch_input or false
 
     local tuples = {}
     local exp_result = {}
+
+    -- Ensure empty sources are empty table and not nil.
+    for i = 1, sources_cnt do
+        if tuples[i] == nil then
+            tuples[i] = {}
+        end
+    end
 
     -- Prepare N tables with tuples as input for merger.
     for i = 1, tuples_cnt do
         -- [1, sources_cnt]
         local guava = digest.guava(i, sources_cnt) + 1
         local tuple = schema.gen_tuple(i)
-        if tuples[guava] == nil then
-            tuples[guava] = {}
-        end
         table.insert(tuples[guava], tuple)
         table.insert(exp_result, tuple)
     end
@@ -247,19 +253,31 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     -- Sort expected output.
     sort_tuples(exp_result, schema.parts)
 
+    -- Wrap tuples from each source into a table to imitate
+    -- 'batch request': a request that return multiple select
+    -- results. Here we have BATCH_SIZE select results.
+    if use_batch_input then
+        local new_tuples = {}
+        for i = 1, sources_cnt do
+            new_tuples[i] = {}
+            for j = 1, BATCH_SIZE do
+                new_tuples[i][j] = tuples[i]
+            end
+        end
+        tuples = new_tuples
+    end
+
     -- Initialize N buffers; write corresponding tuples to that buffers;
     -- that imitates netbox's select with {buffer = ...}.
-    local buffers = {}
     local inputs = {}
     for i = 1, sources_cnt do
         inputs[i] = buffer.ibuf()
-        msgpackffi.internal.encode_r(inputs[i],
-            {[IPROTO_DATA] = tuples[i] or {}}, 0)
-        buffers[i] = inputs[i]
+        msgpackffi.internal.encode_r(inputs[i], {[IPROTO_DATA] = tuples[i]}, 0)
     end
 
     -- Replace buffers[i] with a function that gives one tuple per call.
     if use_function_input then
+        local buffers = table.copy(inputs)
         for i = 1, sources_cnt do
             local idx = 1
             local received_tuples
@@ -282,20 +300,30 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     return inputs, exp_result
 end
 
-local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
-    fiber.yield()
+local function input_type_str(opts)
+    if opts.use_function_input then
+        return ' (use_function_input)'
+    elseif opts.use_batch_input then
+        return ' (use_batch_input)'
+    end
 
-    local opts = opts or {}
-    local use_function_input = opts.use_function_input or false
+    return ''
+end
 
-    local inputs, exp_result =
-        prepare_data(schema, tuples_cnt, sources_cnt, opts)
-    local merger_inst = merger.new(schema.parts)
+local function run_merger_internal(context)
+    local test = context.test
+    local schema = context.schema
+    local tuples_cnt = context.tuples_cnt
+    local sources_cnt = context.sources_cnt
+    local exp_result = context.exp_result
+    local merger_inst = context.merger_inst
+    local merger_start_opts = context.merger_start_opts
+    local opts = context.opts
 
     local res = {}
 
     -- Merge N inputs into res.
-    merger_inst:start(inputs, 1)
+    merger_inst:start(unpack(merger_start_opts))
     while true do
         local tuple = merger_inst:next()
         if tuple == nil then break end
@@ -313,15 +341,79 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
     lowercase_unicode_ci_fields(res, schema.parts)
     lowercase_unicode_ci_fields(exp_result, schema.parts)
 
-    local use_function_input_str = use_function_input and
-        ' (use_function_input)' or ''
     test:is_deeply(res, exp_result,
         ('check order on %3d tuples in %4d sources%s')
-        :format(tuples_cnt, sources_cnt, use_function_input_str))
+        :format(tuples_cnt, sources_cnt, input_type_str(opts)))
+end
+
+local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
+    fiber.yield()
+
+    local opts = opts or {}
+    local use_function_input = opts.use_function_input or false
+    local use_batch_input = opts.use_batch_input or false
+
+    local inputs, exp_result =
+        prepare_data(schema, tuples_cnt, sources_cnt, opts)
+    local merger_inst = merger.new(schema.parts)
+
+    local order = 1
+    local context = {
+        test = test,
+        schema = schema,
+        tuples_cnt = tuples_cnt,
+        sources_cnt = sources_cnt,
+        exp_result = exp_result,
+        merger_inst = merger_inst,
+        merger_start_opts = {inputs, order},
+        opts = opts,
+    }
+
+    if use_batch_input then
+        test:test('run chained mergers for batch select results', function(test)
+            test:plan(BATCH_SIZE)
+            context.test = test
+            for i = 1, BATCH_SIZE do
+                local chain_first = i == 1
+                context.merger_start_opts[3] = chain_first
+                -- Use different merger for one of results in the
+                -- batch.
+                if i == math.floor(BATCH_SIZE / 2) then
+                    context.merger_inst = merger.new(schema.parts)
+                end
+                run_merger_internal(context)
+            end
+        end)
+    else
+        run_merger_internal(context)
+    end
+end
+
+local function run_case(test, schema, opts)
+    local opts = opts or {}
+    local use_function_input = opts.use_function_input or false
+    local use_batch_input = opts.use_batch_input or false
+
+    local case_name = ('testing on schema %s%s'):format(
+        schema.name, input_type_str(opts))
+
+    test:test(case_name, function(test)
+        test:plan(6)
+
+        -- Check with small buffers count.
+        run_merger(test, schema, 100, 1, opts)
+        run_merger(test, schema, 100, 2, opts)
+        run_merger(test, schema, 100, 3, opts)
+        run_merger(test, schema, 100, 4, opts)
+        run_merger(test, schema, 100, 5, opts)
+
+        -- Check more buffers then tuples count.
+        run_merger(test, schema, 100, 1000, opts)
+    end)
 end
 
 local test = tap.test('merger')
-test:plan(6 + #schemas * 2 * 6)
+test:plan(6 + #schemas * 3)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -385,21 +477,19 @@ test:is_deeply({ok, err}, {false, exp_err}, 'unknown collation name')
 
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
-    for _, schema in ipairs(schemas) do
-        local use_function_input_str = use_function_input and
-            ' (use_function_input)' or ''
-        test:diag('testing on schema %s%s', schema.name, use_function_input_str)
-
-        -- Check with small buffers count.
-        local opts = {use_function_input = use_function_input}
-        run_merger(test, schema, 100, 1, opts)
-        run_merger(test, schema, 100, 2, opts)
-        run_merger(test, schema, 100, 3, opts)
-        run_merger(test, schema, 100, 4, opts)
-        run_merger(test, schema, 100, 5, opts)
-
-        -- Check more buffers then tuples count.
-        run_merger(test, schema, 100, 1000, opts)
+    for _, use_batch_input in ipairs({false, true}) do
+        for _, schema in ipairs(schemas) do
+            -- These options are mutually exclusive.
+            if use_function_input and use_batch_input then
+                goto continue
+            end
+            local opts = {
+                use_function_input = use_function_input,
+                use_batch_input = use_batch_input,
+            }
+            run_case(test, schema, opts)
+            ::continue::
+        end
     end
 end
 

@@ -82,6 +82,7 @@ struct source {
 		struct ibuf *buf;
 		int next_ref;
 	} input;
+	size_t remain_len;
 	struct tuple *tuple;
 };
 
@@ -140,8 +141,12 @@ source_fetch(struct lua_State *L, struct source *source,
 				   lua_typename(L, lua_type(L, -1)));
 		lua_pop(L, 1);
 	} else {
-		if (ibuf_used(source->input.buf) == 0)
+		if (source->remain_len == 0)
 			return;
+		--source->remain_len;
+		if (ibuf_used(source->input.buf) == 0) {
+			luaL_error(L, "Unexpected msgpack buffer end");
+		}
 		const char *tuple_beg = source->input.buf->rpos;
 		const char *tuple_end = tuple_beg;
 		mp_next(&tuple_end);
@@ -183,16 +188,77 @@ check_merger(struct lua_State *L, int idx)
 	return *merger_ptr;
 }
 
+#define RPOS_P(buf) ((const char **) &(buf)->rpos)
+
+/*
+ * Skip (and check) the wrapper around tuples array (and the array
+ * itself).
+ *
+ * Expected different kind of wrapping depending of chain_input
+ * and chain_first parameters.
+ */
+static int
+skip_input_wrapper(struct ibuf *buf, bool chain_input, bool chain_first,
+		   size_t *len_p)
+{
+	int ok = 1;
+	/* Decode {[IPROTO_DATA] = {...}} wrapper. */
+	if (!chain_input || chain_first)
+		ok = mp_typeof(*buf->rpos) == MP_MAP &&
+			mp_decode_map(RPOS_P(buf)) == 1 &&
+			mp_typeof(*buf->rpos) == MP_UINT &&
+			mp_decode_uint(RPOS_P(buf)) == IPROTO_DATA &&
+			mp_typeof(*buf->rpos) == MP_ARRAY;
+	/* Decode the array around chained input. */
+	if (ok && chain_first)
+		ok = mp_decode_array(RPOS_P(buf)) > 0 &&
+			mp_typeof(*buf->rpos) == MP_ARRAY;
+	/* Decode the array around tuples to merge. */
+	if (ok)
+		*len_p = mp_decode_array(RPOS_P(buf));
+	return ok;
+}
+
+#undef RPOS_P
+
+/* Chained mergers
+ * ===============
+ *
+ * Chained mergers are needed to process a batch select request,
+ * when one response (buffer) contains several results (tuple
+ * arrays) to merge. Reshaping of such results into separate
+ * buffers would lead to extra data copies within Lua memory and
+ * extra time consuming msgpack decoding, so the merger supports
+ * this case of input data shape natively.
+ *
+ * When @a chain_first option is not provided or is nil the merger
+ * expects a usual net.box's select result in each of input
+ * buffers.
+ *
+ * When @a chain_first is provided the merger expects an array of
+ * results instead of just result. Pass `true` for the first
+ * `start` call and `false` for the following ones. It is possible
+ * (but not mandatory) to use different mergers for each result,
+ * just reuse the same buffers for consequent `start` calls.
+ */
 static int
 lbox_merger_start(struct lua_State *L)
 {
 	struct merger *merger;
-	if (lua_gettop(L) != 3 || lua_istable(L, 2) != 1 ||
-	    lua_isnumber(L, 3) != 1 || (merger = check_merger(L, 1)) == NULL)
+	int ok =
+		(lua_gettop(L) == 3 || lua_gettop(L) == 4) &&
+		(merger = check_merger(L, 1)) != NULL &&
+		lua_istable(L, 2) == 1 &&
+		lua_isnumber(L, 3) == 1 &&
+		(lua_isnoneornil(L, 4) == 1 || lua_isboolean(L, 4));
+	if (!ok)
 		return luaL_error(L, "Bad params, use: start(merger, {buffers}, "
-				  "order)");
+				  "order[, chain_first])");
 	merger->order =	lua_tointeger(L, 3) >= 0 ? 1 : -1;
 	free_sources(L, merger);
+
+	bool chain_input = !lua_isnoneornil(L, 4);
+	bool chain_first = chain_input && lua_toboolean(L, 4);
 
 	merger->capacity = 8;
 	const ssize_t sources_size = merger->capacity * sizeof(struct source *);
@@ -250,16 +316,13 @@ lbox_merger_start(struct lua_State *L)
 			int next = luaL_ref(L, LUA_REGISTRYINDEX);
 			merger->sources[merger->count]->input.next_ref = next;
 		} else {
-			/* Decode {[IPROTO_DATA] = {...}} wrapper. */
-			if (mp_typeof(*buf->rpos) != MP_MAP ||
-			    mp_decode_map((const char **) &buf->rpos) != 1 ||
-			    mp_typeof(*buf->rpos) != MP_UINT ||
-			    mp_decode_uint((const char **) &buf->rpos) !=
-			    IPROTO_DATA || mp_typeof(*buf->rpos) != MP_ARRAY) {
+			size_t *len_p =
+				&merger->sources[merger->count]->remain_len;
+			if (!skip_input_wrapper(buf, chain_input, chain_first,
+						len_p)) {
 				free_sources(L, merger);
 				return luaL_error(L, "Invalid merge source");
 			}
-			mp_decode_array((const char **) &buf->rpos);
 			merger->sources[merger->count]->input.buf = buf;
 		}
 		merger->sources[merger->count]->tuple = NULL;
