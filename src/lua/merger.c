@@ -63,9 +63,18 @@
 	return -1;						\
 } while(0)
 
+enum source_type_t {
+	SOURCE_TYPE_BUFFER,
+	SOURCE_TYPE_FUNCTION,
+};
+
 struct source {
 	struct heap_node hnode;
-	struct ibuf *buf;
+	enum source_type_t source_type;
+	union {
+		struct ibuf *buf;
+		int next_ref;
+	} input;
 	struct tuple *tuple;
 };
 
@@ -107,24 +116,42 @@ source_less(const heap_t *heap, const struct heap_node *a,
 #include "salad/heap.h"
 
 static inline void
-source_fetch(struct source *source, box_tuple_format_t *format)
+source_fetch(struct lua_State *L, struct source *source,
+	     box_tuple_format_t *format)
 {
 	source->tuple = NULL;
-	if (ibuf_used(source->buf) == 0)
-		return;
-	const char *tuple_beg = source->buf->rpos;
-	const char *tuple_end = tuple_beg;
-	mp_next(&tuple_end);
-	assert(tuple_end <= source->buf->wpos);
-	source->buf->rpos = (char *) tuple_end;
-	source->tuple = box_tuple_new(format, tuple_beg, tuple_end);
+	if (source->source_type == SOURCE_TYPE_FUNCTION) {
+		lua_rawgeti(L, LUA_REGISTRYINDEX, source->input.next_ref);
+		lua_call(L, 0, 1);
+		if (lua_isnil(L, -1)) {
+			lua_pop(L, 1);
+			return;
+		}
+		source->tuple = luaT_istuple(L, -1);
+		if (source->tuple == NULL)
+			luaL_error(L, "source_fetch: tuple expected, got %s",
+				   lua_typename(L, lua_type(L, -1)));
+		lua_pop(L, 1);
+	} else {
+		if (ibuf_used(source->input.buf) == 0)
+			return;
+		const char *tuple_beg = source->input.buf->rpos;
+		const char *tuple_end = tuple_beg;
+		mp_next(&tuple_end);
+		assert(tuple_end <= source->input.buf->wpos);
+		source->input.buf->rpos = (char *) tuple_end;
+		source->tuple = box_tuple_new(format, tuple_beg, tuple_end);
+	}
 	box_tuple_ref(source->tuple);
 }
 
 static void
-free_sources(struct merger *merger)
+free_sources(struct lua_State *L, struct merger *merger)
 {
 	for (uint32_t i = 0; i < merger->count; ++i) {
+		if (merger->sources[i]->source_type == SOURCE_TYPE_FUNCTION)
+			luaL_unref(L, LUA_REGISTRYINDEX,
+				   merger->sources[i]->input.next_ref);
 		if (merger->sources[i]->tuple != NULL)
 			box_tuple_unref(merger->sources[i]->tuple);
 		free(merger->sources[i]);
@@ -158,24 +185,34 @@ lbox_merger_start(struct lua_State *L)
 		return luaL_error(L, "Bad params, use: start(merger, {buffers}, "
 				  "order)");
 	merger->order =	lua_tointeger(L, 3) >= 0 ? 1 : -1;
-	free_sources(merger);
+	free_sources(L, merger);
 
 	merger->capacity = 8;
 	const ssize_t sources_size = merger->capacity * sizeof(struct source *);
 	merger->sources = (struct source **) malloc(sources_size);
 	if (merger->sources == NULL)
 		throw_out_of_memory_error(L, sources_size, "merger->sources");
-	/* Fetch all sources */
+	/* Fetch all sources. */
 	while (true) {
 		lua_pushinteger(L, merger->count + 1);
 		lua_gettable(L, 2);
 		if (lua_isnil(L, -1))
 			break;
-		struct ibuf *buf = (struct ibuf *) lua_topointer(L, -1);
-		if (buf == NULL)
-			break;
-		if (ibuf_used(buf) == 0)
-			continue;
+		enum source_type_t source_type;
+		struct ibuf *buf = NULL;
+		if (lua_isfunction(L, -1)) {
+			/* Function input. */
+			source_type = SOURCE_TYPE_FUNCTION;
+		} else {
+			/* Buffer input. */
+			source_type = SOURCE_TYPE_BUFFER;
+			buf = (struct ibuf *) lua_topointer(L, -1);
+			if (buf == NULL)
+				break;
+			if (ibuf_used(buf) == 0)
+				continue;
+		}
+		/* Shrink sources array if needed. */
 		if (merger->count == merger->capacity) {
 			merger->capacity *= 2;
 			struct source **new_sources;
@@ -184,32 +221,42 @@ lbox_merger_start(struct lua_State *L)
 			new_sources = (struct source **) realloc(
 				merger->sources, new_sources_size);
 			if (new_sources == NULL) {
-				free_sources(merger);
+				free_sources(L, merger);
 				throw_out_of_memory_error(L, new_sources_size,
 							  "new_sources");
 			}
 			merger->sources = new_sources;
 		}
+		/* Allocate the new source. */
 		merger->sources[merger->count] =
 			(struct source *) malloc(sizeof(struct source));
 		if (merger->sources[merger->count] == NULL) {
-			free_sources(merger);
+			free_sources(L, merger);
 			throw_out_of_memory_error(L, sizeof(struct source),
 						  "source");
 		}
+		merger->sources[merger->count]->source_type = source_type;
 
-		if (mp_typeof(*buf->rpos) != MP_MAP ||
-		    mp_decode_map((const char **) &buf->rpos) != 1 ||
-		    mp_typeof(*buf->rpos) != MP_UINT ||
-		    mp_decode_uint((const char **) &buf->rpos) != IPROTO_DATA ||
-		    mp_typeof(*buf->rpos) != MP_ARRAY) {
-			free_sources(merger);
-			return luaL_error(L, "Invalid merge source");
+		if (source_type == SOURCE_TYPE_FUNCTION) {
+			/* Save a function to get next tuple. */
+			lua_pushvalue(L, -1); /* duplicate the function */
+			int next = luaL_ref(L, LUA_REGISTRYINDEX);
+			merger->sources[merger->count]->input.next_ref = next;
+		} else {
+			/* Decode {[IPROTO_DATA] = {...}} wrapper. */
+			if (mp_typeof(*buf->rpos) != MP_MAP ||
+			    mp_decode_map((const char **) &buf->rpos) != 1 ||
+			    mp_typeof(*buf->rpos) != MP_UINT ||
+			    mp_decode_uint((const char **) &buf->rpos) !=
+			    IPROTO_DATA || mp_typeof(*buf->rpos) != MP_ARRAY) {
+				free_sources(L, merger);
+				return luaL_error(L, "Invalid merge source");
+			}
+			mp_decode_array((const char **) &buf->rpos);
+			merger->sources[merger->count]->input.buf = buf;
 		}
-		mp_decode_array((const char **) &buf->rpos);
-		merger->sources[merger->count]->buf = buf;
 		merger->sources[merger->count]->tuple = NULL;
-		source_fetch(merger->sources[merger->count], merger->format);
+		source_fetch(L, merger->sources[merger->count], merger->format);
 		const struct tuple *tuple =
 		    merger->sources[merger->count]->tuple;
 #ifndef NDEBUG
@@ -243,7 +290,7 @@ lbox_merger_next(struct lua_State *L)
 	struct source *source = container_of(hnode, struct source, hnode);
 	luaT_pushtuple(L, source->tuple);
 	box_tuple_unref(source->tuple);
-	source_fetch(source, merger->format);
+	source_fetch(L, source, merger->format);
 #ifndef NDEBUG
 	if (source->tuple == NULL)
 		say_debug("merger: [source %p] delete", source);
@@ -383,7 +430,7 @@ lbox_merger_gc(struct lua_State *L)
 	struct merger *merger;
 	if ((merger = check_merger(L, 1)) == NULL)
 		return 0;
-	free_sources(merger);
+	free_sources(L, merger);
 	box_key_def_delete(merger->key_def);
 	box_tuple_format_unref(merger->format);
 	free(merger);
