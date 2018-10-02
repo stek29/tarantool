@@ -45,6 +45,7 @@
 #include "box/iproto_constants.h" /* IPROTO_DATA */
 #include "box/tuple.h"
 #include "box/lua/tuple.h"
+#include "box/field_def.h"
 
 #ifndef NDEBUG
 #include "say.h"
@@ -305,14 +306,22 @@ lbox_merger_new(struct lua_State *L)
 		lua_gettable(L, -2);
 		if (lua_isnil(L, -1))
 			break;
-		fieldno[count] = lua_tointeger(L, -1);
+		fieldno[count] = lua_tointeger(L, -1) - 1;
 		lua_pop(L, 1);
 		lua_pushstring(L, "type");
 		lua_gettable(L, -2);
 		if (lua_isnil(L, -1))
 			break;
-		type[count] = lua_tointeger(L, -1);
+		size_t type_len;
+		const char *type_name = lua_tolstring(L, -1, &type_len);
 		lua_pop(L, 1);
+		type[count] = field_type_by_name(type_name, type_len);
+		if (type[count] == field_type_MAX) {
+			free(fieldno);
+			free(type);
+			return luaL_error(L, "Unknown field type: %s",
+					  type_name);
+		}
 		++count;
 	}
 
