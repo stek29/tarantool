@@ -221,6 +221,19 @@ skip_input_wrapper(struct ibuf *buf, bool chain_input, bool chain_first,
 
 #undef RPOS_P
 
+static int start_usage_error(struct lua_State *L, const char *param_name)
+{
+	static const char *usage = "start(merger, "
+				   "{buffer, buffer, ...}[, {"
+				   "descending = <boolean> or <nil>, "
+				   "chain_first = <boolean> or <nil>}])";
+	if (param_name == NULL)
+		return luaL_error(L, "Bad params, use: %s", usage);
+	else
+		return luaL_error(L, "Bad param \"%s\", use: %s", param_name,
+				  usage);
+}
+
 /* Chained mergers
  * ===============
  *
@@ -245,20 +258,49 @@ static int
 lbox_merger_start(struct lua_State *L)
 {
 	struct merger *merger;
-	int ok =
-		(lua_gettop(L) == 3 || lua_gettop(L) == 4) &&
+	int ok = (lua_gettop(L) == 2 || lua_gettop(L) == 3) &&
+		/* Merger. */
 		(merger = check_merger(L, 1)) != NULL &&
+		/* Buffers. */
 		lua_istable(L, 2) == 1 &&
-		lua_isnumber(L, 3) == 1 &&
-		(lua_isnoneornil(L, 4) == 1 || lua_isboolean(L, 4));
+		/* Opts. */
+		(lua_isnoneornil(L, 3) == 1 || lua_istable(L, 3) == 1);
 	if (!ok)
-		return luaL_error(L, "Bad params, use: start(merger, {buffers}, "
-				  "order[, chain_first])");
-	merger->order =	lua_tointeger(L, 3) >= 0 ? 1 : -1;
-	free_sources(L, merger);
+		return start_usage_error(L, NULL);
 
-	bool chain_input = !lua_isnoneornil(L, 4);
-	bool chain_first = chain_input && lua_toboolean(L, 4);
+	/* Default opts. */
+	merger->order = 1;
+	bool chain_input = false;
+	bool chain_first = false;
+
+	/* Parse opts. */
+	if (lua_istable(L, 3)) {
+		/* Parse descending to merger->order. */
+		lua_pushstring(L, "descending");
+		lua_gettable(L, 3);
+		if (!lua_isnil(L, -1)) {
+			if (lua_isboolean(L, -1))
+				merger->order =	lua_toboolean(L, -1) ? 1 : -1;
+			else
+				return start_usage_error(L, "descending");
+		}
+		lua_pop(L, 1);
+
+		/* Parse chain_first to chain_input and chain_first. */
+		lua_pushstring(L, "chain_first");
+		lua_gettable(L, 3);
+		if (!lua_isnil(L, -1)) {
+			if (lua_isboolean(L, -1)) {
+				chain_input = true;
+				chain_first = lua_toboolean(L, -1);
+			} else {
+				return start_usage_error(L, "chain_first");
+			}
+		}
+		lua_pop(L, 1);
+	}
+
+	free_sources(L, merger);
 
 	merger->capacity = 8;
 	const ssize_t sources_size = merger->capacity * sizeof(struct source *);

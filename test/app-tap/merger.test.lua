@@ -365,7 +365,7 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
         sources_cnt = sources_cnt,
         exp_result = exp_result,
         merger_inst = merger_inst,
-        merger_start_opts = {inputs, order},
+        merger_start_opts = {inputs, {}},
         opts = opts,
     }
 
@@ -375,7 +375,7 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
             context.test = test
             for i = 1, BATCH_SIZE do
                 local chain_first = i == 1
-                context.merger_start_opts[3] = chain_first
+                context.merger_start_opts[2].chain_first = chain_first
                 -- Use different merger for one of results in the
                 -- batch.
                 if i == math.floor(BATCH_SIZE / 2) then
@@ -413,7 +413,7 @@ local function run_case(test, schema, opts)
 end
 
 local test = tap.test('merger')
-test:plan(6 + #schemas * 3)
+test:plan(9 + #schemas * 3)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -474,6 +474,28 @@ local ok, err = pcall(merger.new, {{
 }})
 local exp_err = 'Unknown collation: "unknown"'
 test:is_deeply({ok, err}, {false, exp_err}, 'unknown collation name')
+
+local merger_inst = merger.new({{
+    fieldno = 1,
+    type = 'string',
+}})
+local start_usage = 'start(merger, {buffer, buffer, ...}' ..
+    '[, {descending = <boolean> or <nil>, chain_first = <boolean> or <nil>}])'
+
+-- Case: start() bad opts.
+local ok, err = pcall(merger_inst.start, merger_inst, {}, 1)
+local exp_err = 'Bad params, use: ' .. start_usage
+test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts')
+
+-- Case: start() bad opts.descending.
+local ok, err = pcall(merger_inst.start, merger_inst, {}, {descending = 1})
+local exp_err = 'Bad param "descending", use: ' .. start_usage
+test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts.descending')
+
+-- Case: start() bad opts.chain_first.
+local ok, err = pcall(merger_inst.start, merger_inst, {}, {chain_first = 1})
+local exp_err = 'Bad param "chain_first", use: ' .. start_usage
+test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts.chain_first')
 
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
