@@ -28,9 +28,10 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "say.h"
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -53,7 +54,40 @@
 #include "src/box/coll_id_cache.h"
 
 #ifndef NDEBUG
+
 #include "say.h"
+
+#define MERGER_HEAP_INSERT(heap, hnode, source) do {			\
+	say_debug("merger: [source %p] insert: tuple: %s", (source),	\
+		  tuple_str((source)->tuple));				\
+	merger_heap_insert((heap), (hnode));				\
+} while(0)
+
+#define MERGER_HEAP_DELETE(heap, hnode, source) do {		\
+	say_debug("merger: [source %p] delete", (source));	\
+	merger_heap_delete((heap), (hnode));			\
+} while(0)
+
+#define MERGER_HEAP_UPDATE(heap, hnode, source) do {			\
+	say_debug("merger: [source %p] update: tuple: %s", (source),	\
+		  tuple_str((source)->tuple));				\
+	merger_heap_update((heap), (hnode));				\
+} while(0)
+
+#else /* !defined(NDEBUG) */
+
+#define MERGER_HEAP_INSERT(heap, hnode, source) do {	\
+	merger_heap_insert((heap), (hnode));		\
+} while(0)
+
+#define MERGER_HEAP_DELETE(heap, hnode, source) do {	\
+	merger_heap_delete((heap), (hnode));		\
+} while(0)
+
+#define MERGER_HEAP_UPDATE(heap, hnode, source) do {	\
+	merger_heap_update((heap), (hnode));		\
+} while(0)
+
 #endif /* !defined(NDEBUG) */
 
 #include "diag.h"
@@ -240,12 +274,72 @@ static int start_usage_error(struct lua_State *L, const char *param_name)
 	static const char *usage = "start(merger, "
 				   "{buffer, buffer, ...}[, {"
 				   "descending = <boolean> or <nil>, "
-				   "chain_first = <boolean> or <nil>}])";
+				   "chain_first = <boolean> or <nil>, "
+				   "buffer = <cdata<struct ibuf>>}])";
 	if (param_name == NULL)
 		return luaL_error(L, "Bad params, use: %s", usage);
 	else
 		return luaL_error(L, "Bad param \"%s\", use: %s", param_name,
 				  usage);
+}
+
+/* Increases *result_len_p in case of source of function type. */
+static struct tuple *
+merger_next(struct lua_State *L, struct merger *merger, uint32_t *result_len_p)
+{
+	struct heap_node *hnode = merger_heap_top(&merger->heap);
+	if (hnode == NULL)
+		return NULL;
+
+	struct source *source = container_of(hnode, struct source, hnode);
+	struct tuple *res = source->tuple;
+	source_fetch(L, source, merger->format);
+	if (source->tuple == NULL)
+		MERGER_HEAP_DELETE(&merger->heap, hnode, source);
+	else
+		MERGER_HEAP_UPDATE(&merger->heap, hnode, source);
+
+	if (source->source_type == SOURCE_TYPE_FUNCTION)
+		++(*result_len_p);
+
+	return res;
+}
+
+/* XXX: Support a header for chained mergers. */
+static void
+encode_result_buffer(struct lua_State *L, struct merger *merger,
+		     struct ibuf *obuf, uint32_t buffer_result_len,
+		     bool has_function_source)
+{
+	uint32_t result_len = buffer_result_len;
+	/* Reserve maximum size for the array to set it later in
+	 * case of a function source is used. */
+	uint32_t result_len_max = has_function_source ? UINT32_MAX : result_len;
+
+	/* Encode header. */
+	ibuf_reserve(obuf, mp_sizeof_map(1) +
+		     mp_sizeof_uint(IPROTO_DATA) +
+		     mp_sizeof_array(result_len_max));
+	obuf->wpos = mp_encode_map(obuf->wpos, 1);
+	obuf->wpos = mp_encode_uint(obuf->wpos, IPROTO_DATA);
+	obuf->wpos = mp_encode_array(obuf->wpos, result_len_max);
+	uint32_t result_len_offset = 4;
+
+	/* Fetch, merge and copy tuples to the buffer. */
+	struct tuple *tuple;
+	while ((tuple = merger_next(L, merger, &result_len)) != NULL) {
+		uint32_t bsize = tuple->bsize;
+		ibuf_reserve(obuf, bsize);
+		memcpy(obuf->wpos, tuple_data(tuple), bsize);
+		obuf->wpos += bsize;
+		result_len_offset += bsize;
+	}
+
+	/* Write the real array size if needed. */
+	if (has_function_source)
+		mp_store_u32(obuf->wpos - result_len_offset,
+			     result_len);
+
 }
 
 /* Chained mergers
@@ -286,6 +380,7 @@ lbox_merger_start(struct lua_State *L)
 	merger->order = 1;
 	bool chain_input = false;
 	bool chain_first = false;
+	struct ibuf *obuf = NULL;
 
 	/* Parse opts. */
 	if (lua_istable(L, 3)) {
@@ -312,15 +407,30 @@ lbox_merger_start(struct lua_State *L)
 			}
 		}
 		lua_pop(L, 1);
+
+		/* Parse buffer. */
+		lua_pushstring(L, "buffer");
+		lua_gettable(L, 3);
+		if (!lua_isnil(L, -1)) {
+			if ((obuf = check_ibuf(L, -1)) == NULL)
+				return start_usage_error(L, "buffer");
+		}
+		lua_pop(L, 1);
 	}
 
+	/* (Re)allocate sources array. */
 	free_sources(L, merger);
-
 	merger->capacity = 8;
 	const ssize_t sources_size = merger->capacity * sizeof(struct source *);
 	merger->sources = (struct source **) malloc(sources_size);
 	if (merger->sources == NULL)
 		throw_out_of_memory_error(L, sources_size, "merger->sources");
+
+	/* Counts only buffer inputs, but not function inputs,
+	 * because they sizes are unknown until the end. */
+	uint32_t buffer_result_len = 0;
+	bool has_function_source = false;
+
 	/* Fetch all sources. */
 	while (true) {
 		lua_pushinteger(L, merger->count + 1);
@@ -332,6 +442,7 @@ lbox_merger_start(struct lua_State *L)
 		if (lua_isfunction(L, -1)) {
 			/* Function input. */
 			source_type = SOURCE_TYPE_FUNCTION;
+			has_function_source = true;
 		} else if ((buf = check_ibuf(L, -1)) != NULL) {
 			/* Buffer input. */
 			source_type = SOURCE_TYPE_BUFFER;
@@ -380,26 +491,23 @@ lbox_merger_start(struct lua_State *L)
 				return luaL_error(L, "Invalid merge source");
 			}
 			merger->sources[merger->count]->input.buf = buf;
+			buffer_result_len += *len_p;
 		}
 		merger->sources[merger->count]->tuple = NULL;
 		source_fetch(L, merger->sources[merger->count], merger->format);
-		const struct tuple *tuple =
-		    merger->sources[merger->count]->tuple;
-#ifndef NDEBUG
-		if (tuple != NULL) {
-		    say_debug("merger: [source %p] initial fetch; tuple: %s",
-			      merger->sources[merger->count],
-			      tuple_str(tuple));
-		}
-#endif /* !defined(NDEBUG) */
-		if (tuple != NULL)
-			merger_heap_insert(
+		if (merger->sources[merger->count]->tuple != NULL)
+			MERGER_HEAP_INSERT(
 				&merger->heap,
-				&merger->sources[merger->count]->hnode);
+				&merger->sources[merger->count]->hnode,
+				merger->sources[merger->count]);
 		++merger->count;
 	}
-	lua_pushboolean(L, true);
-	return 1;
+
+	if (obuf != NULL)
+		encode_result_buffer(L, merger, obuf, buffer_result_len,
+				     has_function_source);
+
+	return 0;
 }
 
 static int
@@ -417,17 +525,10 @@ lbox_merger_next(struct lua_State *L)
 	luaT_pushtuple(L, source->tuple);
 	box_tuple_unref(source->tuple);
 	source_fetch(L, source, merger->format);
-#ifndef NDEBUG
 	if (source->tuple == NULL)
-		say_debug("merger: [source %p] delete", source);
+		MERGER_HEAP_DELETE(&merger->heap, hnode, source);
 	else
-		say_debug("merger: [source %p] update; tuple: %s", source,
-			  tuple_str(source->tuple));
-#endif /* !defined(NDEBUG) */
-	if (source->tuple == NULL)
-		merger_heap_delete(&merger->heap, hnode);
-	else
-		merger_heap_update(&merger->heap, hnode);
+		MERGER_HEAP_UPDATE(&merger->heap, hnode, source);
 	return 1;
 }
 

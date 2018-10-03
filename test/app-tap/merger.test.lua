@@ -301,14 +301,24 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     return inputs, exp_result
 end
 
-local function input_type_str(opts)
+local function merger_opts_str(opts)
+    local params = {}
+
     if opts.use_function_input then
-        return ' (use_function_input)'
+        table.insert(params, 'use_function_input')
     elseif opts.use_batch_input then
-        return ' (use_batch_input)'
+        table.insert(params, 'use_batch_input')
     end
 
-    return ''
+    if opts.use_buffer_output then
+        table.insert(params, 'use_buffer_output')
+    end
+
+    if next(params) == nil then
+        return ''
+    end
+
+    return (' (%s)'):format(table.concat(params, ', '))
 end
 
 local function run_merger_internal(context)
@@ -321,19 +331,27 @@ local function run_merger_internal(context)
     local merger_start_opts = context.merger_start_opts
     local opts = context.opts
 
-    local res = {}
+    local res
 
     -- Merge N inputs into res.
     merger_inst:start(unpack(merger_start_opts))
-    while true do
-        local tuple = merger_inst:next()
-        if tuple == nil then break end
-        table.insert(res, tuple)
-    end
 
-    -- Prepare for comparing.
-    for i = 1, #res do
-        res[i] = res[i]:totable()
+    if merger_start_opts[2].buffer == nil then
+        res = {}
+
+        while true do
+            local tuple = merger_inst:next()
+            if tuple == nil then break end
+            table.insert(res, tuple)
+        end
+
+        -- Prepare for comparing.
+        for i = 1, #res do
+            res[i] = res[i]:totable()
+        end
+    else
+        res = msgpackffi.decode(merger_start_opts[2].buffer.rpos)
+        res = res[IPROTO_DATA]
     end
 
     -- unicode_ci does not differentiate btw 'A' and 'a', so the
@@ -344,7 +362,7 @@ local function run_merger_internal(context)
 
     test:is_deeply(res, exp_result,
         ('check order on %3d tuples in %4d sources%s')
-        :format(tuples_cnt, sources_cnt, input_type_str(opts)))
+        :format(tuples_cnt, sources_cnt, merger_opts_str(opts)))
 end
 
 local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
@@ -369,6 +387,12 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
         merger_start_opts = {inputs, {}},
         opts = opts,
     }
+
+    local obuf
+    if opts.use_buffer_output then
+        obuf = buffer.ibuf()
+        context.merger_start_opts[2].buffer = obuf
+    end
 
     if use_batch_input then
         test:test('run chained mergers for batch select results', function(test)
@@ -396,7 +420,7 @@ local function run_case(test, schema, opts)
     local use_batch_input = opts.use_batch_input or false
 
     local case_name = ('testing on schema %s%s'):format(
-        schema.name, input_type_str(opts))
+        schema.name, merger_opts_str(opts))
 
     test:test(case_name, function(test)
         test:plan(6)
@@ -414,7 +438,7 @@ local function run_case(test, schema, opts)
 end
 
 local test = tap.test('merger')
-test:plan(11 + #schemas * 3)
+test:plan(11 + #schemas * 3 * 2)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -481,7 +505,8 @@ local merger_inst = merger.new({{
     type = 'string',
 }})
 local start_usage = 'start(merger, {buffer, buffer, ...}' ..
-    '[, {descending = <boolean> or <nil>, chain_first = <boolean> or <nil>}])'
+    '[, {descending = <boolean> or <nil>, chain_first = <boolean> or <nil>, ' ..
+    'buffer = <cdata<struct ibuf>>}])'
 
 -- Case: start() bad opts.
 local ok, err = pcall(merger_inst.start, merger_inst, {}, 1)
@@ -511,17 +536,20 @@ test:is_deeply({ok, err}, {false, exp_err}, 'start() bad cdata buffer')
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
     for _, use_batch_input in ipairs({false, true}) do
-        for _, schema in ipairs(schemas) do
-            -- These options are mutually exclusive.
-            if use_function_input and use_batch_input then
-                goto continue
+        for _, use_buffer_output in ipairs({false, true}) do
+            for _, schema in ipairs(schemas) do
+                -- These options are mutually exclusive.
+                if use_function_input and use_batch_input then
+                    goto continue
+                end
+                local opts = {
+                    use_function_input = use_function_input,
+                    use_batch_input = use_batch_input,
+                    use_buffer_output = use_buffer_output,
+                }
+                run_case(test, schema, opts)
+                ::continue::
             end
-            local opts = {
-                use_function_input = use_function_input,
-                use_batch_input = use_batch_input,
-            }
-            run_case(test, schema, opts)
-            ::continue::
         end
     end
 end
