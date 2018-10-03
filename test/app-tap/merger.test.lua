@@ -8,6 +8,7 @@ local merger = require('merger')
 local crypto = require('crypto')
 local fiber = require('fiber')
 local utf8 = require('utf8')
+local ffi = require('ffi')
 
 local IPROTO_DATA = 48
 local BATCH_SIZE = 10
@@ -413,7 +414,7 @@ local function run_case(test, schema, opts)
 end
 
 local test = tap.test('merger')
-test:plan(9 + #schemas * 3)
+test:plan(11 + #schemas * 3)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -496,6 +497,16 @@ test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts.descending')
 local ok, err = pcall(merger_inst.start, merger_inst, {}, {chain_first = 1})
 local exp_err = 'Bad param "chain_first", use: ' .. start_usage
 test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts.chain_first')
+
+-- Case: start() bad buffer.
+local ok, err = pcall(merger_inst.start, merger_inst, {1})
+local exp_err = 'Unknown input type at index 1'
+test:is_deeply({ok, err}, {false, exp_err}, 'start() bad buffer')
+
+-- Case: start() bad cdata buffer.
+local ok, err = pcall(merger_inst.start, merger_inst, {ffi.new('char *')})
+local exp_err = 'Unknown input type at index 1'
+test:is_deeply({ok, err}, {false, exp_err}, 'start() bad cdata buffer')
 
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do

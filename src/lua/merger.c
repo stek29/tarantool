@@ -87,6 +87,7 @@ struct source {
 };
 
 static uint32_t merger_type_id = 0;
+static uint32_t ibuf_type_id = 0;
 
 struct merger {
 	heap_t heap;
@@ -186,6 +187,19 @@ check_merger(struct lua_State *L, int idx)
 	if (merger_ptr == NULL || cdata_type != merger_type_id)
 		return NULL;
 	return *merger_ptr;
+}
+
+static struct ibuf *
+check_ibuf(struct lua_State *L, int idx)
+{
+	if (lua_type(L, idx) != LUA_TCDATA)
+		return NULL;
+
+	uint32_t cdata_type;
+	struct ibuf *ibuf_ptr = luaL_checkcdata(L, idx, &cdata_type);
+	if (ibuf_ptr == NULL || cdata_type != ibuf_type_id)
+		return NULL;
+	return ibuf_ptr;
 }
 
 #define RPOS_P(buf) ((const char **) &(buf)->rpos)
@@ -318,14 +332,14 @@ lbox_merger_start(struct lua_State *L)
 		if (lua_isfunction(L, -1)) {
 			/* Function input. */
 			source_type = SOURCE_TYPE_FUNCTION;
-		} else {
+		} else if ((buf = check_ibuf(L, -1)) != NULL) {
 			/* Buffer input. */
 			source_type = SOURCE_TYPE_BUFFER;
-			buf = (struct ibuf *) lua_topointer(L, -1);
-			if (buf == NULL)
-				break;
 			if (ibuf_used(buf) == 0)
 				continue;
+		} else {
+			return luaL_error(L, "Unknown input type at index %d",
+					  merger->count + 1);
 		}
 		/* Shrink sources array if needed. */
 		if (merger->count == merger->capacity) {
@@ -626,7 +640,9 @@ LUA_API int
 luaopen_merger(lua_State *L)
 {
 	luaL_cdef(L, "struct merger;");
+	luaL_cdef(L, "struct ibuf;");
 	merger_type_id = luaL_ctypeid(L, "struct merger&");
+	ibuf_type_id = luaL_ctypeid(L, "struct ibuf");
 	lua_newtable(L);
 	static const struct luaL_Reg meta[] = {
 		{"new", lbox_merger_new},
