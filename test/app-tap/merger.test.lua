@@ -554,6 +554,4 @@ for _, use_function_input in ipairs({false, true}) do
     end
 end
 
--- XXX: test merger_inst:cmp()
-
 os.exit(test:check() and 0 or 1)

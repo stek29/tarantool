@@ -705,26 +705,6 @@ lbox_merger_new(struct lua_State *L)
 }
 
 static int
-lbox_merger_cmp(struct lua_State *L)
-{
-	struct merger *merger;
-	if (lua_gettop(L) != 2 ||
-	    (merger = check_merger(L, 1)) == NULL)
-		return luaL_error(L, "Bad params, use: cmp(merger, key)");
-	const char *key = lua_tostring(L, 2);
-	struct heap_node *hnode = merger_heap_top(&merger->heap);
-	if (hnode == NULL) {
-		lua_pushnil(L);
-		return 1;
-	}
-	struct source *source = container_of(hnode, struct source, hnode);
-	lua_pushinteger(L, box_tuple_compare_with_key(source->tuple, key,
-						      merger->key_def) *
-			   merger->order);
-	return 1;
-}
-
-static int
 lbox_merger_gc(struct lua_State *L)
 {
 	struct merger *merger;
@@ -755,8 +735,6 @@ luaopen_merger(lua_State *L)
 	lua_newtable(L); /* merger.internal */
 	lua_pushcfunction(L, lbox_merger_start);
 	lua_setfield(L, -2, "start");
-	lua_pushcfunction(L, lbox_merger_cmp);
-	lua_setfield(L, -2, "cmp");
 	lua_pushcfunction(L, lbox_merger_next);
 	lua_setfield(L, -2, "next");
 	lua_setfield(L, -2, "internal");

@@ -5,7 +5,6 @@ local merger_t = ffi.typeof('struct merger')
 
 local methods = {
     ['start'] = merger.internal.start,
-    ['cmp']   = merger.internal.cmp,
     ['next']  = merger.internal.next,
 }
 
