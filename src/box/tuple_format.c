@@ -54,6 +54,86 @@ tuple_format_sizeof(uint32_t field_count)
 }
 
 /**
+ * Propagate @a field to MessagePack(field)[index].
+ * @param[in][out] field Field to propagate.
+ * @param index 1-based index to propagate to.
+ *
+ * @retval  0 Success, the index was found.
+ * @retval -1 Not found.
+ */
+static inline int
+tuple_field_go_to_index(const char **field, uint64_t index)
+{
+	enum mp_type type = mp_typeof(**field);
+	if (type == MP_ARRAY) {
+		if (index == 0)
+			return -1;
+		/* Make index 0-based. */
+		index -= TUPLE_INDEX_BASE;
+		uint32_t count = mp_decode_array(field);
+		if (index >= count)
+			return -1;
+		for (; index > 0; --index)
+			mp_next(field);
+		return 0;
+	} else if (type == MP_MAP) {
+		uint64_t count = mp_decode_map(field);
+		for (; count > 0; --count) {
+			type = mp_typeof(**field);
+			if (type == MP_UINT) {
+				uint64_t value = mp_decode_uint(field);
+				if (value == index)
+					return 0;
+			} else if (type == MP_INT) {
+				int64_t value = mp_decode_int(field);
+				if (value >= 0 && (uint64_t)value == index)
+					return 0;
+			} else {
+				/* Skip key. */
+				mp_next(field);
+			}
+			/* Skip value. */
+			mp_next(field);
+		}
+	}
+	return -1;
+}
+
+/**
+ * Propagate @a field to MessagePack(field)[key].
+ * @param[in][out] field Field to propagate.
+ * @param key Key to propagate to.
+ * @param len Length of @a key.
+ *
+ * @retval  0 Success, the index was found.
+ * @retval -1 Not found.
+ */
+static inline int
+tuple_field_go_to_key(const char **field, const char *key, int len)
+{
+	enum mp_type type = mp_typeof(**field);
+	if (type != MP_MAP)
+		return -1;
+	uint64_t count = mp_decode_map(field);
+	for (; count > 0; --count) {
+		type = mp_typeof(**field);
+		if (type == MP_STR) {
+			uint32_t value_len;
+			const char *value = mp_decode_str(field, &value_len);
+			if (value_len == (uint)len &&
+			    memcmp(value, key, len) == 0)
+				return 0;
+		} else {
+			/* Skip key. */
+			mp_next(field);
+		}
+		/* Skip value. */
+		mp_next(field);
+	}
+	return -1;
+}
+
+/**
  * Add and initialize a new key_part to format.
  * @param format Format to initialize.
  * @param fields Fields definition if any.
@@ -483,86 +563,6 @@ void
 box_tuple_format_unref(box_tuple_format_t *format)
 {
 	tuple_format_unref(format);
-}
-
-/**
- * Propagate @a field to MessagePack(field)[index].
- * @param[in][out] field Field to propagate.
- * @param index 1-based index to propagate to.
- *
- * @retval  0 Success, the index was found.
- * @retval -1 Not found.
- */
-static inline int
-tuple_field_go_to_index(const char **field, uint64_t index)
-{
-	enum mp_type type = mp_typeof(**field);
-	if (type == MP_ARRAY) {
-		if (index == 0)
-			return -1;
-		/* Make index 0-based. */
-		index -= TUPLE_INDEX_BASE;
-		uint32_t count = mp_decode_array(field);
-		if (index >= count)
-			return -1;
-		for (; index > 0; --index)
-			mp_next(field);
-		return 0;
-	} else if (type == MP_MAP) {
-		uint64_t count = mp_decode_map(field);
-		for (; count > 0; --count) {
-			type = mp_typeof(**field);
-			if (type == MP_UINT) {
-				uint64_t value = mp_decode_uint(field);
-				if (value == index)
-					return 0;
-			} else if (type == MP_INT) {
-				int64_t value = mp_decode_int(field);
-				if (value >= 0 && (uint64_t)value == index)
-					return 0;
-			} else {
-				/* Skip key. */
-				mp_next(field);
-			}
-			/* Skip value. */
-			mp_next(field);
-		}
-	}
-	return -1;
-}
-
-/**
- * Propagate @a field to MessagePack(field)[key].
- * @param[in][out] field Field to propagate.
- * @param key Key to propagate to.
- * @param len Length of @a key.
- *
- * @retval  0 Success, the index was found.
- * @retval -1 Not found.
- */
-static inline int
-tuple_field_go_to_key(const char **field, const char *key, int len)
-{
-	enum mp_type type = mp_typeof(**field);
-	if (type != MP_MAP)
-		return -1;
-	uint64_t count = mp_decode_map(field);
-	for (; count > 0; --count) {
-		type = mp_typeof(**field);
-		if (type == MP_STR) {
-			uint32_t value_len;
-			const char *value = mp_decode_str(field, &value_len);
-			if (value_len == (uint)len &&
-			    memcmp(value, key, len) == 0)
-				return 0;
-		} else {
-			/* Skip key. */
-			mp_next(field);
-		}
-		/* Skip value. */
-		mp_next(field);
-	}
-	return -1;
 }
 
 /**
