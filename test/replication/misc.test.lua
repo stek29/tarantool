@@ -43,30 +43,32 @@ test_run:create_cluster(SERVERS, "replication", {args="0.1"})
 test_run:wait_fullmesh(SERVERS)
 test_run:cmd("switch autobootstrap1")
 test_run = require('test_run').new()
-box.cfg{replication_timeout = 0.01, replication_connect_timeout=0.01}
+box.cfg{replication_timeout = 0.2, replication_connect_timeout=0.2}
 test_run:cmd("switch autobootstrap2")
 test_run = require('test_run').new()
-box.cfg{replication_timeout = 0.01, replication_connect_timeout=0.01}
+box.cfg{replication_timeout = 0.2, replication_connect_timeout=0.2}
 test_run:cmd("switch autobootstrap3")
 test_run = require('test_run').new()
 fiber=require('fiber')
-box.cfg{replication_timeout = 0.01, replication_connect_timeout=0.01}
+box.cfg{replication_timeout = 0.2, replication_connect_timeout=0.2}
 _ = box.schema.space.create('test_timeout'):create_index('pk')
 test_run:cmd("setopt delimiter ';'")
 function test_timeout()
+    local replicaA = box.info.replication[1].upstream or box.info.replication[2].upstream
+    local replicaB = box.info.replication[3].upstream or box.info.replication[2].upstream
     for i = 0, 99 do 
         box.space.test_timeout:replace({1})
-        fiber.sleep(0.005)
-        local rinfo = box.info.replication
-        if rinfo[1].upstream and rinfo[1].upstream.status ~= 'follow' or
-           rinfo[2].upstream and rinfo[2].upstream.status ~= 'follow' or
-           rinfo[3].upstream and rinfo[3].upstream.status ~= 'follow' then
-            return error('Replication broken')
-        end
+        local n = 200
+        repeat
+            fiber.sleep(0.001)
+            n = n - 1
+            if n == 0 then return error(box.info.replication) end
+        until replicaA.status == 'follow' and replicaB.status == 'follow'
     end
     return true
 end ;
 test_run:cmd("setopt delimiter ''");
+-- the replica status is checked 100 times, each check within replication_timeout
 test_timeout()
 
 -- gh-3247 - Sequence-generated value is not replicated in case
