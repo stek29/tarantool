@@ -108,7 +108,7 @@ local schemas = {
             end
             return parts
         end)(),
-        gen_tuple = function(i)
+        gen_tuple = function(_)
             local tuple = {}
             for i = 1, 128 do
                 tuple[i] = i
@@ -369,14 +369,12 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
     fiber.yield()
 
     local opts = opts or {}
-    local use_function_input = opts.use_function_input or false
     local use_batch_input = opts.use_batch_input or false
 
     local inputs, exp_result =
         prepare_data(schema, tuples_cnt, sources_cnt, opts)
     local merger_inst = merger.new(schema.parts)
 
-    local order = 1
     local context = {
         test = test,
         schema = schema,
@@ -416,8 +414,6 @@ end
 
 local function run_case(test, schema, opts)
     local opts = opts or {}
-    local use_function_input = opts.use_function_input or false
-    local use_batch_input = opts.use_batch_input or false
 
     local case_name = ('testing on schema %s%s'):format(
         schema.name, merger_opts_str(opts))
