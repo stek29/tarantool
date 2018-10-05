@@ -80,3 +80,4 @@ box.space.test:select()
 -- Cleanup.
 test_run:cmd("switch default")
 test_run:drop_cluster(SERVERS)
+test_run:cleanup_cluster()
