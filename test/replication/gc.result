@@ -95,7 +95,7 @@ test_run:cmd("switch replica")
 fiber = require('fiber')
 ---
 ...
-while box.space.test:count() < 200 do fiber.sleep(0.01) end
+while box.space.test == nil or box.space.test:count() < 200 do fiber.sleep(0.01) end
 ---
 ...
 box.space.test:count()
@@ -119,9 +119,9 @@ wait_gc(1)
 ---
 - true
 ...
--- Make sure the replica will receive data it is subscribed
--- to long enough for us to invoke garbage collection.
-box.error.injection.set("ERRINJ_RELAY_TIMEOUT", 0.05)
+-- Make sure the replica will not receive data until
+-- we test garbage collection.
+box.error.injection.set("ERRINJ_RELAY_SEND_DELAY", true)
 ---
 - ok
 ...
@@ -153,13 +153,12 @@ box.snapshot()
 ---
 - true
 ...
-#fio.glob('./master/*.xlog') == 2 or fio.listdir('./master')
+while #fio.glob('./master/*.xlog') ~= 2 do fiber.sleep(0.01) end
 ---
-- true
 ...
--- Remove the timeout injection so that the replica catches
+-- Resume replicaton so that the replica catches
 -- up quickly.
-box.error.injection.set("ERRINJ_RELAY_TIMEOUT", 0)
+box.error.injection.set("ERRINJ_RELAY_SEND_DELAY", false)
 ---
 - ok
 ...
@@ -188,9 +187,8 @@ wait_gc(1)
 ---
 - true
 ...
-#fio.glob('./master/*.xlog') == 0 or fio.listdir('./master')
+while #fio.glob('./master/*.xlog') ~= 0 do fiber.sleep(0.01) end
 ---
-- true
 ...
 --
 -- Check that the master doesn't delete xlog files sent to the

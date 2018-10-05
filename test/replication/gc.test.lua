@@ -52,7 +52,7 @@ test_run:cmd("start server replica")
 -- data from the master. Check it.
 test_run:cmd("switch replica")
 fiber = require('fiber')
-while box.space.test:count() < 200 do fiber.sleep(0.01) end
+while box.space.test == nil or box.space.test:count() < 200 do fiber.sleep(0.01) end
 box.space.test:count()
 test_run:cmd("switch default")
 
@@ -61,9 +61,9 @@ test_run:cmd("switch default")
 wait_gc(1)
 #box.info.gc().checkpoints == 1 or box.info.gc()
 #fio.glob('./master/*.xlog') == 1 or fio.listdir('./master')
--- Make sure the replica will receive data it is subscribed
--- to long enough for us to invoke garbage collection.
-box.error.injection.set("ERRINJ_RELAY_TIMEOUT", 0.05)
+-- Make sure the replica will not receive data until
+-- we test garbage collection.
+box.error.injection.set("ERRINJ_RELAY_SEND_DELAY", true)
 
 -- Send more data to the replica.
 -- Need to do 2 snapshots here, otherwise the replica would
@@ -78,11 +78,11 @@ box.snapshot()
 -- xlogs needed by the replica.
 box.snapshot()
 #box.info.gc().checkpoints == 1 or box.info.gc()
-#fio.glob('./master/*.xlog') == 2 or fio.listdir('./master')
+while #fio.glob('./master/*.xlog') ~= 2 do fiber.sleep(0.01) end
 
--- Remove the timeout injection so that the replica catches
+-- Resume replicaton so that the replica catches
 -- up quickly.
-box.error.injection.set("ERRINJ_RELAY_TIMEOUT", 0)
+box.error.injection.set("ERRINJ_RELAY_SEND_DELAY", false)
 
 -- Check that the replica received all data from the master.
 test_run:cmd("switch replica")
@@ -94,7 +94,7 @@ test_run:cmd("switch default")
 -- from the old checkpoint.
 wait_gc(1)
 #box.info.gc().checkpoints == 1 or box.info.gc()
-#fio.glob('./master/*.xlog') == 0 or fio.listdir('./master')
+while #fio.glob('./master/*.xlog') ~= 0 do fiber.sleep(0.01) end
 --
 -- Check that the master doesn't delete xlog files sent to the
 -- replica until it receives a confirmation that the data has
