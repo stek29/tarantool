@@ -1,8 +1,8 @@
-fio = require 'fio'
 test_run = require('test_run').new()
 engine = test_run:get_cfg('engine')
 replica_set = require('fast_replica')
 fiber = require('fiber')
+fio = require('fio')
 
 test_run:cleanup_cluster()
 

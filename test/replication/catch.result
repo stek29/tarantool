@@ -1,6 +1,9 @@
 env = require('test_run')
 ---
 ...
+fiber = require('fiber')
+---
+...
 test_run = env.new()
 ---
 ...

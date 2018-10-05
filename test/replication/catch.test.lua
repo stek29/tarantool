@@ -1,7 +1,7 @@
 env = require('test_run')
+fiber = require('fiber')
 test_run = env.new()
 engine = test_run:get_cfg('engine')
-
 
 net_box = require('net.box')
 errinj = box.error.injection
