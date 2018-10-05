@@ -216,6 +216,9 @@ test_run:cmd("cleanup server replica")
 ---
 - true
 ...
+test_run:cleanup_cluster()
+---
+...
 box.schema.user.revoke('guest', 'replication')
 ---
 ...

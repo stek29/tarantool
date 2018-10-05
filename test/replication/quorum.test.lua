@@ -166,7 +166,8 @@ test_run:cmd('switch replica_quorum')
 box.cfg{replication={INSTANCE_URI, nonexistent_uri(1)}}
 box.info.id
 test_run:cmd('switch default')
-test_run:cmd('stop server replica_quorum')
-test_run:cmd('cleanup server replica_quorum')
-test_run:cmd('delete server replica_quorum')
+test_run:cmd("stop server replica_quorum")
+test_run:cmd("cleanup server replica_quorum")
+test_run:cmd("delete server replica_quorum")
+test_run:cleanup_cluster()
 box.schema.user.revoke('guest', 'replication')
