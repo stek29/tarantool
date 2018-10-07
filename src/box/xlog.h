@@ -303,6 +303,11 @@ struct xlog {
 	/** The current offset in the log file, for writing. */
 	off_t offset;
 	/**
+	 * Size of disk space preallocated at @offset with
+	 * xlog_fallocate().
+	 */
+	size_t alloc_len;
+	/**
 	 * Output buffer, works as row accumulator for
 	 * compression.
 	 */
@@ -421,6 +426,21 @@ xlog_is_open(struct xlog *l)
  */
 int
 xlog_rename(struct xlog *l);
+
+/**
+ * Try to allocate at least @size bytes of disk space at the end
+ * of the given xlog file. This function can be used in order to
+ * ensure that the following write of @size bytes will not fail
+ * with ENOSPC.
+ *
+ * On success, this function returns the number of bytes available
+ * for writing. If fallocate is not supported by the underlying OS,
+ * it returns 0.
+ *
+ * On error, it returns -1 and sets diag and errno.
+ */
+ssize_t
+xlog_fallocate(struct xlog *log, size_t size);
 
 /**
  * Write a row to xlog, 

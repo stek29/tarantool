@@ -59,6 +59,10 @@ struct journal_entry {
 	 */
 	struct fiber *fiber;
 	/**
+	 * Max size the rows are going to take when encoded.
+	 */
+	size_t len;
+	/**
 	 * The number of rows in the request.
 	 */
 	int n_rows;

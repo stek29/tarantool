@@ -76,6 +76,22 @@ enum {
 	 * Maybe this should be a configuration option.
 	 */
 	XLOG_TX_COMPRESS_THRESHOLD = 2 * 1024,
+	/**
+	 * Minimal number of bytes of disk space to allocate
+	 * with xlog_fallocate(). Obviously, we want to invoke
+	 * fallocate() as rare as possible to avoid overhead
+	 * associated with a system call, however at the same
+	 * time we do not want to call it to allocate too big
+	 * chunks, because this may increase tx latency.
+	 */
+	XLOG_FALLOCATE_MIN = 128 * 1024,
+	/**
+	 * Allocate at least XLOG_FALLOCATE_FACTOR * size bytes
+	 * when xlog_fallocate(size) is called so that we do
+	 * not incur the overhead of an extra syscall per each
+	 * committed transaction.
+	 */
+	XLOG_FALLOCATE_FACTOR = 8,
 };
 
 /* {{{ struct xlog_meta */
@@ -988,6 +1004,48 @@ xdir_create_xlog(struct xdir *dir, struct xlog *xlog,
 	return 0;
 }
 
+/*
+ * Simplify recovery after a temporary write failure:
+ * truncate the file to the best known good write position.
+ */
+static void
+xlog_write_error(struct xlog *log)
+{
+	if (lseek(log->fd, log->offset, SEEK_SET) < 0 ||
+	    ftruncate(log->fd, log->offset) != 0)
+		panic_syserror("failed to truncate xlog after write error");
+	log->alloc_len = 0;
+}
+
+ssize_t
+xlog_fallocate(struct xlog *log, size_t len)
+{
+#ifdef HAVE_POSIX_FALLOCATE
+	if (log->alloc_len > len)
+		return log->alloc_len;
+
+	len = len * XLOG_FALLOCATE_FACTOR - log->alloc_len;
+	len = MAX(len, XLOG_FALLOCATE_MIN);
+	off_t offset = log->offset + log->alloc_len;
+
+	int rc = posix_fallocate(log->fd, offset, len);
+	if (rc != 0) {
+		xlog_write_error(log);
+		errno = rc;
+		diag_set(SystemError, "%s: can't allocate disk space",
+			 log->filename);
+		return -1;
+	}
+
+	log->alloc_len += len;
+	return log->alloc_len;
+#else
+	(void)log;
+	(void)len;
+	return 0;
+#endif /* HAVE_POSIX_FALLOCATE */
+}
+
 /**
  * Write a sequence of uncompressed xrow objects.
  *
@@ -1168,17 +1226,14 @@ xlog_tx_write(struct xlog *log)
 	});
 
 	obuf_reset(&log->obuf);
-	/*
-	 * Simplify recovery after a temporary write failure:
-	 * truncate the file to the best known good write
-	 * position.
-	 */
 	if (written < 0) {
-		if (lseek(log->fd, log->offset, SEEK_SET) < 0 ||
-		    ftruncate(log->fd, log->offset) != 0)
-			panic_syserror("failed to truncate xlog after write error");
+		xlog_write_error(log);
 		return -1;
 	}
+	if (log->alloc_len > (size_t)written)
+		log->alloc_len -= written;
+	else
+		log->alloc_len = 0;
 	log->offset += written;
 	log->rows += log->tx_rows;
 	log->tx_rows = 0;
@@ -1376,6 +1431,17 @@ xlog_write_eof(struct xlog *l)
 		diag_set(ClientError, ER_INJECTION, "xlog write injection");
 		return -1;
 	});
+
+	/*
+	 * Free disk space preallocated with xlog_fallocate().
+	 * Don't write the eof marker if this fails, otherwise
+	 * we'll get "data after eof marker" error on recovery.
+	 */
+	if (l->alloc_len > 0 && ftruncate(l->fd, l->offset) < 0) {
+		diag_set(SystemError, "ftruncate() failed");
+		return -1;
+	}
+
 	if (fio_writen(l->fd, &eof_marker, sizeof(eof_marker)) < 0) {
 		diag_set(SystemError, "write() failed");
 		return -1;
@@ -1791,6 +1857,15 @@ xlog_cursor_next_tx(struct xlog_cursor *i)
 		return -1;
 	if (rc > 0)
 		return 1;
+	if (load_u32(i->rbuf.rpos) == 0) {
+		/*
+		 * Space preallocated with xlog_fallocate().
+		 * Treat as eof and clear the buffer.
+		 */
+		i->read_offset -= ibuf_used(&i->rbuf);
+		ibuf_reset(&i->rbuf);
+		return 1;
+	}
 	if (load_u32(i->rbuf.rpos) == eof_marker) {
 		/* eof marker found */
 		goto eof_found;

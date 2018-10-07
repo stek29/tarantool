@@ -126,6 +126,11 @@ struct wal_writer
 
 struct wal_msg {
 	struct cmsg base;
+	/**
+	 * Max size the committed requests are going to take when
+	 * written to disk.
+	 */
+	size_t len;
 	/** Input queue, on output contains all committed requests. */
 	struct stailq commit;
 	/**
@@ -168,6 +173,7 @@ static void
 wal_msg_create(struct wal_msg *batch)
 {
 	cmsg_init(&batch->base, wal_request_route);
+	batch->len = 0;
 	stailq_create(&batch->commit);
 	stailq_create(&batch->rollback);
 }
@@ -603,6 +609,20 @@ wal_opt_rotate(struct wal_writer *writer)
 	return 0;
 }
 
+/**
+ * Make sure there's enough disk space to write @len bytes
+ * of data to the current WAL.
+ */
+static int
+wal_fallocate(struct wal_writer *writer, size_t len)
+{
+	if (xlog_fallocate(&writer->current_wal, len) < 0) {
+		diag_log();
+		return -1;
+	}
+	return 0;
+}
+
 static void
 wal_writer_clear_bus(struct cmsg *msg)
 {
@@ -685,6 +705,12 @@ wal_write_to_disk(struct cmsg *msg)
 
 	/* Xlog is only rotated between queue processing  */
 	if (wal_opt_rotate(writer) != 0) {
+		stailq_concat(&wal_msg->rollback, &wal_msg->commit);
+		return wal_writer_begin_rollback(writer);
+	}
+
+	/* Ensure there's enough disk space before writing anything. */
+	if (wal_fallocate(writer, wal_msg->len) != 0) {
 		stailq_concat(&wal_msg->rollback, &wal_msg->commit);
 		return wal_writer_begin_rollback(writer);
 	}
@@ -858,6 +884,7 @@ wal_write(struct journal *journal, struct journal_entry *entry)
 		stailq_add_tail_entry(&batch->commit, entry, fifo);
 		cpipe_push(&wal_thread.wal_pipe, &batch->base);
 	}
+	batch->len += entry->len;
 	wal_thread.wal_pipe.n_input += entry->n_rows * XROW_IOVMAX;
 	cpipe_flush_input(&wal_thread.wal_pipe);
 	/**
