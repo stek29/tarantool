@@ -55,6 +55,9 @@ wal_write(struct journal *, struct journal_entry *);
 static int64_t
 wal_write_in_wal_mode_none(struct journal *, struct journal_entry *);
 
+static void
+wal_notify_watchers(struct wal_writer *writer, unsigned events);
+
 /* WAL thread. */
 struct wal_thread {
 	/** 'wal' thread doing the writes. */
@@ -537,8 +540,10 @@ struct wal_gc_msg
 static int
 wal_collect_garbage_f(struct cbus_call_msg *data)
 {
+	struct wal_writer *writer = &wal_writer_singleton;
 	int64_t lsn = ((struct wal_gc_msg *)data)->lsn;
-	xdir_collect_garbage(&wal_writer_singleton.wal_dir, lsn, -1, false);
+	xdir_collect_garbage(&writer->wal_dir, lsn, -1, false);
+	wal_notify_watchers(writer, WAL_EVENT_GC);
 	return 0;
 }
 
@@ -555,9 +560,6 @@ wal_collect_garbage(int64_t lsn)
 		  wal_collect_garbage_f, NULL, TIMEOUT_INFINITY);
 	fiber_set_cancellable(cancellable);
 }
-
-static void
-wal_notify_watchers(struct wal_writer *writer, unsigned events);
 
 /**
  * If there is no current WAL, try to open it, and close the
@@ -1008,7 +1010,10 @@ wal_watcher_notify(struct wal_watcher *watcher, unsigned events)
 {
 	assert(!rlist_empty(&watcher->next));
 
-	if (watcher->msg.cmsg.route != NULL) {
+	struct wal_watcher_msg *msg = &watcher->msg;
+	struct wal_writer *writer = &wal_writer_singleton;
+
+	if (msg->cmsg.route != NULL) {
 		/*
 		 * If the notification message is still en route,
 		 * mark the watcher to resend it as soon as it
@@ -1018,19 +1023,19 @@ wal_watcher_notify(struct wal_watcher *watcher, unsigned events)
 		return;
 	}
 
-	watcher->msg.events = events;
-	cmsg_init(&watcher->msg.cmsg, watcher->route);
-	cpipe_push(&watcher->watcher_pipe, &watcher->msg.cmsg);
+	msg->events = events;
+	msg->gc_lsn = xdir_first_vclock(&writer->wal_dir, NULL);
+	if (msg->gc_lsn < 0)
+		msg->gc_lsn = vclock_sum(&writer->vclock);
+	cmsg_init(&msg->cmsg, watcher->route);
+	cpipe_push(&watcher->watcher_pipe, &msg->cmsg);
 }
 
 static void
 wal_watcher_notify_perform(struct cmsg *cmsg)
 {
 	struct wal_watcher_msg *msg = (struct wal_watcher_msg *) cmsg;
-	struct wal_watcher *watcher = msg->watcher;
-	unsigned events = msg->events;
-
-	watcher->cb(watcher, events);
+	msg->watcher->cb(msg);
 }
 
 static void
@@ -1083,7 +1088,7 @@ wal_watcher_detach(void *arg)
 
 void
 wal_set_watcher(struct wal_watcher *watcher, const char *name,
-		void (*watcher_cb)(struct wal_watcher *, unsigned events),
+		void (*watcher_cb)(struct wal_watcher_msg *),
 		void (*process_cb)(struct cbus_endpoint *))
 {
 	assert(journal_is_initialized(&wal_writer_singleton.base));

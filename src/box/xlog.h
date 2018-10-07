@@ -198,6 +198,21 @@ void
 xdir_collect_inprogress(struct xdir *xdir);
 
 /**
+ * Return LSN and vclock (unless @vclock is NULL) of the oldest
+ * file in a directory or -1 if the directory is empty.
+ */
+static inline int64_t
+xdir_first_vclock(struct xdir *xdir, struct vclock *vclock)
+{
+	struct vclock *first = vclockset_first(&xdir->index);
+	if (first == NULL)
+		return -1;
+	if (vclock != NULL)
+		vclock_copy(vclock, first);
+	return vclock_sum(first);
+}
+
+/**
  * Return LSN and vclock (unless @vclock is NULL) of the newest
  * file in a directory or -1 if the directory is empty.
  */
