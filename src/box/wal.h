@@ -56,9 +56,9 @@ void
 wal_thread_start();
 
 int
-wal_init(enum wal_mode wal_mode, const char *wal_dirname,
-	 const struct tt_uuid *instance_uuid, struct vclock *vclock,
-	 int64_t wal_max_rows, int64_t wal_max_size);
+wal_init(enum wal_mode wal_mode, const char *wal_dirname, int64_t wal_max_rows,
+	 int64_t wal_max_size, const struct tt_uuid *instance_uuid,
+	 const struct vclock *vclock, int64_t first_checkpoint_lsn);
 
 void
 wal_thread_stop();
@@ -165,11 +165,14 @@ int
 wal_checkpoint(struct vclock *vclock, bool rotate);
 
 /**
- * Remove WAL files that are not needed to recover
- * from snapshot with @lsn or newer.
+ * Remove all WAL files whose signature is less than @wal_lsn.
+ * Update the oldest checkpoint signature with @checkpoint_lsn.
+ * WAL thread will delete WAL files that are not needed to
+ * recover from the oldest checkpoint if it runs out of disk
+ * space.
  */
 void
-wal_collect_garbage(int64_t lsn);
+wal_collect_garbage(int64_t wal_lsn, int64_t checkpoint_lsn);
 
 void
 wal_init_vy_log();

@@ -102,6 +102,7 @@ struct errinj {
 	_(ERRINJ_XLOG_GARBAGE, ERRINJ_BOOL, {.bparam = false}) \
 	_(ERRINJ_XLOG_META, ERRINJ_BOOL, {.bparam = false}) \
 	_(ERRINJ_XLOG_READ, ERRINJ_INT, {.iparam = -1}) \
+	_(ERRINJ_XLOG_FALLOCATE, ERRINJ_INT, {.iparam = 0}) \
 	_(ERRINJ_VYRUN_INDEX_GARBAGE, ERRINJ_BOOL, {.bparam = false}) \
 	_(ERRINJ_VYRUN_DATA_READ, ERRINJ_BOOL, {.bparam = false}) \
 	_(ERRINJ_BUILD_INDEX, ERRINJ_INT, {.iparam = -1}) \

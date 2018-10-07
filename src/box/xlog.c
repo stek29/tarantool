@@ -1027,6 +1027,14 @@ xlog_write_error(struct xlog *log)
 ssize_t
 xlog_fallocate(struct xlog *log, size_t len)
 {
+	struct errinj *inj = errinj(ERRINJ_XLOG_FALLOCATE, ERRINJ_INT);
+	if (inj != NULL && inj->iparam > 0) {
+		inj->iparam--;
+		diag_set(ClientError, ER_INJECTION, "xlog fallocate");
+		errno = ENOSPC;
+		return -1;
+	}
+
 #ifdef HAVE_POSIX_FALLOCATE
 	if (log->alloc_len > len)
 		return log->alloc_len;

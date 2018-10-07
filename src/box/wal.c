@@ -111,6 +111,12 @@ struct wal_writer
 	 * with this LSN and LSN becomes "real".
 	 */
 	struct vclock vclock;
+	/**
+	 * Signature of the oldest checkpoint available on the instance.
+	 * The WAL writer must not delete WAL files that are needed to
+	 * recover from it even if it is running out of disk space.
+	 */
+	int64_t checkpoint_lsn;
 	/** The current WAL file. */
 	struct xlog current_wal;
 	/**
@@ -282,9 +288,9 @@ tx_schedule_rollback(struct cmsg *msg)
  */
 static void
 wal_writer_create(struct wal_writer *writer, enum wal_mode wal_mode,
-		  const char *wal_dirname, const struct tt_uuid *instance_uuid,
-		  struct vclock *vclock, int64_t wal_max_rows,
-		  int64_t wal_max_size)
+		  const char *wal_dirname, int64_t wal_max_rows,
+		  int64_t wal_max_size, const struct tt_uuid *instance_uuid,
+		  const struct vclock *vclock, int64_t checkpoint_lsn)
 {
 	writer->wal_mode = wal_mode;
 	writer->wal_max_rows = wal_max_rows;
@@ -304,6 +310,7 @@ wal_writer_create(struct wal_writer *writer, enum wal_mode wal_mode,
 	vclock_create(&writer->vclock);
 	vclock_copy(&writer->vclock, vclock);
 
+	writer->checkpoint_lsn = checkpoint_lsn;
 	rlist_create(&writer->watchers);
 }
 
@@ -407,16 +414,16 @@ wal_open(struct wal_writer *writer)
  *        mode are closed. WAL thread has been started.
  */
 int
-wal_init(enum wal_mode wal_mode, const char *wal_dirname,
-	 const struct tt_uuid *instance_uuid, struct vclock *vclock,
-	 int64_t wal_max_rows, int64_t wal_max_size)
+wal_init(enum wal_mode wal_mode, const char *wal_dirname, int64_t wal_max_rows,
+	 int64_t wal_max_size, const struct tt_uuid *instance_uuid,
+	 const struct vclock *vclock, int64_t first_checkpoint_lsn)
 {
 	assert(wal_max_rows > 1);
 
 	struct wal_writer *writer = &wal_writer_singleton;
-
-	wal_writer_create(writer, wal_mode, wal_dirname, instance_uuid,
-			  vclock, wal_max_rows, wal_max_size);
+	wal_writer_create(writer, wal_mode, wal_dirname, wal_max_rows,
+			  wal_max_size, instance_uuid, vclock,
+			  first_checkpoint_lsn);
 
 	/*
 	 * Scan the WAL directory to build an index of all
@@ -534,27 +541,30 @@ wal_checkpoint(struct vclock *vclock, bool rotate)
 struct wal_gc_msg
 {
 	struct cbus_call_msg base;
-	int64_t lsn;
+	int64_t wal_lsn;
+	int64_t checkpoint_lsn;
 };
 
 static int
 wal_collect_garbage_f(struct cbus_call_msg *data)
 {
 	struct wal_writer *writer = &wal_writer_singleton;
-	int64_t lsn = ((struct wal_gc_msg *)data)->lsn;
-	xdir_collect_garbage(&writer->wal_dir, lsn, -1, false);
+	struct wal_gc_msg *msg = (struct wal_gc_msg *)data;
+	writer->checkpoint_lsn = msg->checkpoint_lsn;
+	xdir_collect_garbage(&writer->wal_dir, msg->wal_lsn, -1, false);
 	wal_notify_watchers(writer, WAL_EVENT_GC);
 	return 0;
 }
 
 void
-wal_collect_garbage(int64_t lsn)
+wal_collect_garbage(int64_t wal_lsn, int64_t checkpoint_lsn)
 {
 	struct wal_writer *writer = &wal_writer_singleton;
 	if (writer->wal_mode == WAL_NONE)
 		return;
 	struct wal_gc_msg msg;
-	msg.lsn = lsn;
+	msg.wal_lsn = wal_lsn;
+	msg.checkpoint_lsn = checkpoint_lsn;
 	bool cancellable = fiber_set_cancellable(false);
 	cbus_call(&wal_thread.wal_pipe, &wal_thread.tx_prio_pipe, &msg.base,
 		  wal_collect_garbage_f, NULL, TIMEOUT_INFINITY);
@@ -614,15 +624,43 @@ wal_opt_rotate(struct wal_writer *writer)
 /**
  * Make sure there's enough disk space to write @len bytes
  * of data to the current WAL.
+ *
+ * If fallocate() fails with ENOSPC, delete old WAL files
+ * that are not needed for recovery and retry.
  */
 static int
 wal_fallocate(struct wal_writer *writer, size_t len)
 {
-	if (xlog_fallocate(&writer->current_wal, len) < 0) {
-		diag_log();
-		return -1;
+	bool warn_no_space = true;
+retry:
+	if (xlog_fallocate(&writer->current_wal, len) >= 0) {
+		diag_clear(diag_get());
+		return 0;
 	}
-	return 0;
+	if (errno != ENOSPC)
+		goto error;
+
+	if (warn_no_space) {
+		say_crit("ran out of disk space, try to delete old WAL files");
+		warn_no_space = false;
+	}
+
+	/* Keep the original error. */
+	struct diag diag;
+	diag_create(&diag);
+	diag_move(diag_get(), &diag);
+	int rc = xdir_collect_garbage(&writer->wal_dir, writer->checkpoint_lsn,
+				      1, false);
+	diag_move(&diag, diag_get());
+	diag_destroy(&diag);
+	if (rc <= 0)
+		goto error;
+
+	wal_notify_watchers(writer, WAL_EVENT_GC);
+	goto retry;
+error:
+	diag_log();
+	return -1;
 }
 
 static void

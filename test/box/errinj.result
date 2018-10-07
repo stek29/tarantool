@@ -24,6 +24,8 @@ errinj.info()
     state: 0
   ERRINJ_VY_SCHED_TIMEOUT:
     state: 0
+  ERRINJ_XLOG_FALLOCATE:
+    state: 0
   ERRINJ_WAL_WRITE_PARTIAL:
     state: -1
   ERRINJ_VY_GC:
