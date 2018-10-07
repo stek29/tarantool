@@ -180,10 +180,16 @@ xdir_format_filename(struct xdir *dir, int64_t signature,
 
 /**
  * Remove files whose signature is less than specified.
+ * If @max_files > 0, stop after deleting @max_files files.
  * If @use_coio is set, files are deleted by coio threads.
+ *
+ * On success, this function returns the number of deleted
+ * files. If it failed to delete a file, it returns -1 and
+ * sets diag.
  */
 int
-xdir_collect_garbage(struct xdir *dir, int64_t signature, bool use_coio);
+xdir_collect_garbage(struct xdir *dir, int64_t signature,
+		     int max_files, bool use_coio);
 
 /**
  * Remove inprogress files in the specified directory.

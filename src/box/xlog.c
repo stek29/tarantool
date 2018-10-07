@@ -669,10 +669,16 @@ xdir_format_filename(struct xdir *dir, int64_t signature,
 }
 
 int
-xdir_collect_garbage(struct xdir *dir, int64_t signature, bool use_coio)
+xdir_collect_garbage(struct xdir *dir, int64_t signature,
+		     int max_files, bool use_coio)
 {
+	if (max_files <= 0)
+		max_files = INT_MAX;
+
+	int count = 0;
 	struct vclock *vclock;
-	while ((vclock = vclockset_first(&dir->index)) != NULL &&
+	while (count < max_files &&
+	       (vclock = vclockset_first(&dir->index)) != NULL &&
 	       vclock_sum(vclock) < signature) {
 		char *filename = xdir_format_filename(dir, vclock_sum(vclock),
 						      NONE);
@@ -694,8 +700,9 @@ xdir_collect_garbage(struct xdir *dir, int64_t signature, bool use_coio)
 			say_info("removed %s", filename);
 		vclockset_remove(&dir->index, vclock);
 		free(vclock);
+		count++;
 	}
-	return 0;
+	return count;
 }
 
 void

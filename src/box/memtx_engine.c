@@ -834,7 +834,7 @@ memtx_engine_collect_garbage(struct engine *engine, int64_t lsn)
 	 * That said, we have to abort garbage collection if we
 	 * fail to delete a snap file.
 	 */
-	if (xdir_collect_garbage(&memtx->snap_dir, lsn, true) != 0)
+	if (xdir_collect_garbage(&memtx->snap_dir, lsn, -1, true) < 0)
 		return -1;
 
 	return 0;
