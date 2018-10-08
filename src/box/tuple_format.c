@@ -452,7 +452,7 @@ tuple_format_dup(struct tuple_format *src)
 
 /** @sa declaration for details. */
 int
-tuple_init_field_map(const struct tuple_format *format, uint32_t *field_map,
+tuple_init_field_map(struct tuple_format *format, uint32_t *field_map,
 		     const char *tuple)
 {
 	if (format->field_count == 0)

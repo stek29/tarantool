@@ -320,7 +320,7 @@ box_tuple_format_unref(box_tuple_format_t *format);
  * tuple + off_i = indexed_field_i;
  */
 int
-tuple_init_field_map(const struct tuple_format *format, uint32_t *field_map,
+tuple_init_field_map(struct tuple_format *format, uint32_t *field_map,
 		     const char *tuple);
 
 /**
