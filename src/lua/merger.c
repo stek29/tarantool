@@ -131,6 +131,20 @@ struct merger {
 	struct key_def *key_def;
 	box_tuple_format_t *format;
 	int order;
+	/* Parameters to decode msgpack header. */
+	bool input_chain;
+	bool input_chain_first;
+	/* User-provided output buffer. */
+	struct ibuf *obuf;
+	/* Parameters to encode msgpack header. */
+	bool output_chain;
+	bool output_chain_first;
+	uint32_t output_chain_len;
+	/* Merger sums input buffers length and then adds
+	 * function sources length during output buffer encoding
+	 * (because their sizes are unknown until the end). */
+	uint32_t buffer_result_len;
+	bool has_function_source;
 };
 
 static int
@@ -242,23 +256,22 @@ check_ibuf(struct lua_State *L, int idx)
  * Skip (and check) the wrapper around tuples array (and the array
  * itself).
  *
- * Expected different kind of wrapping depending of chain_input
- * and chain_first parameters.
+ * Expected different kind of wrapping depending of input_chain
+ * and input_chain_first merger fields.
  */
 static int
-skip_input_wrapper(struct ibuf *buf, bool chain_input, bool chain_first,
-		   size_t *len_p)
+decode_header(struct merger *merger, struct ibuf *buf, size_t *len_p)
 {
 	int ok = 1;
 	/* Decode {[IPROTO_DATA] = {...}} wrapper. */
-	if (!chain_input || chain_first)
+	if (!merger->input_chain || merger->input_chain_first)
 		ok = mp_typeof(*buf->rpos) == MP_MAP &&
 			mp_decode_map(RPOS_P(buf)) == 1 &&
 			mp_typeof(*buf->rpos) == MP_UINT &&
 			mp_decode_uint(RPOS_P(buf)) == IPROTO_DATA &&
 			mp_typeof(*buf->rpos) == MP_ARRAY;
 	/* Decode the array around chained input. */
-	if (ok && chain_first)
+	if (ok && merger->input_chain_first)
 		ok = mp_decode_array(RPOS_P(buf)) > 0 &&
 			mp_typeof(*buf->rpos) == MP_ARRAY;
 	/* Decode the array around tuples to merge. */
@@ -269,13 +282,44 @@ skip_input_wrapper(struct ibuf *buf, bool chain_input, bool chain_first,
 
 #undef RPOS_P
 
+/*
+ * Encode the wrapper around tuples array (and the array itself).
+ *
+ * The output msgpack depends on output_chain and
+ * output_chain_first merger fields.
+ */
+static void encode_header(struct merger *merger, uint32_t result_len_max)
+{
+	/* Encode {[IPROTO_DATA] = {...}} header. */
+	if (!merger->output_chain || merger->output_chain_first) {
+		ibuf_reserve(merger->obuf, mp_sizeof_map(1) +
+			     mp_sizeof_uint(IPROTO_DATA));
+		merger->obuf->wpos = mp_encode_map(merger->obuf->wpos, 1);
+		merger->obuf->wpos = mp_encode_uint(merger->obuf->wpos,
+						    IPROTO_DATA);
+	}
+	/* Encode the array around chained output. */
+	if (merger->output_chain_first) {
+		uint32_t output_chain_len = merger->output_chain_len;
+		ibuf_reserve(merger->obuf, mp_sizeof_array(output_chain_len));
+		merger->obuf->wpos = mp_encode_array(merger->obuf->wpos,
+						     output_chain_len);
+	}
+	/* Encode the array around resulting tuples. */
+	ibuf_reserve(merger->obuf, mp_sizeof_array(result_len_max));
+	merger->obuf->wpos = mp_encode_array(merger->obuf->wpos,
+					     result_len_max);
+}
+
 static int start_usage_error(struct lua_State *L, const char *param_name)
 {
 	static const char *usage = "start(merger, "
 				   "{buffer, buffer, ...}[, {"
 				   "descending = <boolean> or <nil>, "
-				   "chain_first = <boolean> or <nil>, "
-				   "buffer = <cdata<struct ibuf>>}])";
+				   "input_chain_first = <boolean> or <nil>, "
+				   "buffer = <cdata<struct ibuf>>, "
+				   "output_chain_first = <boolean> or <nil>, "
+				   "output_chain_len = <number> or <nil>}])";
 	if (param_name == NULL)
 		return luaL_error(L, "Bad params, use: %s", usage);
 	else
@@ -305,41 +349,32 @@ merger_next(struct lua_State *L, struct merger *merger, uint32_t *result_len_p)
 	return res;
 }
 
-/* XXX: Support a header for chained mergers. */
 static void
-encode_result_buffer(struct lua_State *L, struct merger *merger,
-		     struct ibuf *obuf, uint32_t buffer_result_len,
-		     bool has_function_source)
+encode_result_buffer(struct lua_State *L, struct merger *merger)
 {
-	uint32_t result_len = buffer_result_len;
-	/* Reserve maximum size for the array to set it later in
-	 * case of a function source is used. */
-	uint32_t result_len_max = has_function_source ? UINT32_MAX : result_len;
-
-	/* Encode header. */
-	ibuf_reserve(obuf, mp_sizeof_map(1) +
-		     mp_sizeof_uint(IPROTO_DATA) +
-		     mp_sizeof_array(result_len_max));
-	obuf->wpos = mp_encode_map(obuf->wpos, 1);
-	obuf->wpos = mp_encode_uint(obuf->wpos, IPROTO_DATA);
-	obuf->wpos = mp_encode_array(obuf->wpos, result_len_max);
+	uint32_t result_len = merger->buffer_result_len;
 	uint32_t result_len_offset = 4;
+
+	/* Reserve maximum size for the array around chained
+	 * output to set it later in case of a function source
+	 * is used. */
+	encode_header(merger, merger->has_function_source ? UINT32_MAX :
+			      result_len);
 
 	/* Fetch, merge and copy tuples to the buffer. */
 	struct tuple *tuple;
 	while ((tuple = merger_next(L, merger, &result_len)) != NULL) {
 		uint32_t bsize = tuple->bsize;
-		ibuf_reserve(obuf, bsize);
-		memcpy(obuf->wpos, tuple_data(tuple), bsize);
-		obuf->wpos += bsize;
+		ibuf_reserve(merger->obuf, bsize);
+		memcpy(merger->obuf->wpos, tuple_data(tuple), bsize);
+		merger->obuf->wpos += bsize;
 		result_len_offset += bsize;
 	}
 
 	/* Write the real array size if needed. */
-	if (has_function_source)
-		mp_store_u32(obuf->wpos - result_len_offset,
+	if (merger->has_function_source)
+		mp_store_u32(merger->obuf->wpos - result_len_offset,
 			     result_len);
-
 }
 
 /* Chained mergers
@@ -352,15 +387,16 @@ encode_result_buffer(struct lua_State *L, struct merger *merger,
  * extra time consuming msgpack decoding, so the merger supports
  * this case of input data shape natively.
  *
- * When @a chain_first option is not provided or is nil the merger
- * expects a usual net.box's select result in each of input
+ * When @a input_chain_first option is not provided or is nil the
+ * merger expects a usual net.box's select result in each of input
  * buffers.
  *
- * When @a chain_first is provided the merger expects an array of
- * results instead of just result. Pass `true` for the first
- * `start` call and `false` for the following ones. It is possible
- * (but not mandatory) to use different mergers for each result,
- * just reuse the same buffers for consequent `start` calls.
+ * When @a input_chain_first is provided the merger expects an
+ * array of results instead of just result. Pass `true` for the
+ * first `start` call and `false` for the following ones. It is
+ * possible (but not mandatory) to use different mergers for each
+ * result, just reuse the same buffers for consequent `start`
+ * calls.
  */
 static int
 lbox_merger_start(struct lua_State *L)
@@ -378,9 +414,16 @@ lbox_merger_start(struct lua_State *L)
 
 	/* Default opts. */
 	merger->order = 1;
-	bool chain_input = false;
-	bool chain_first = false;
-	struct ibuf *obuf = NULL;
+	merger->input_chain = false;
+	merger->input_chain_first = false;
+	merger->obuf = NULL;
+	merger->output_chain = false;
+	merger->output_chain_first = false;
+	merger->output_chain_len = 0;
+
+	/* Flush info for output buffer encoding. */
+	merger->buffer_result_len = 0;
+	merger->has_function_source = false;
 
 	/* Parse opts. */
 	if (lua_istable(L, 3)) {
@@ -395,15 +438,18 @@ lbox_merger_start(struct lua_State *L)
 		}
 		lua_pop(L, 1);
 
-		/* Parse chain_first to chain_input and chain_first. */
-		lua_pushstring(L, "chain_first");
+		/* Parse input_chain_first to input_chain and
+		 * input_chain_first. */
+		lua_pushstring(L, "input_chain_first");
 		lua_gettable(L, 3);
 		if (!lua_isnil(L, -1)) {
 			if (lua_isboolean(L, -1)) {
-				chain_input = true;
-				chain_first = lua_toboolean(L, -1);
+				merger->input_chain = true;
+				merger->input_chain_first =
+					lua_toboolean(L, -1);
 			} else {
-				return start_usage_error(L, "chain_first");
+				return start_usage_error(
+					L, "input_chain_first");
 			}
 		}
 		lua_pop(L, 1);
@@ -412,10 +458,48 @@ lbox_merger_start(struct lua_State *L)
 		lua_pushstring(L, "buffer");
 		lua_gettable(L, 3);
 		if (!lua_isnil(L, -1)) {
-			if ((obuf = check_ibuf(L, -1)) == NULL)
+			if ((merger->obuf = check_ibuf(L, -1)) == NULL)
 				return start_usage_error(L, "buffer");
 		}
 		lua_pop(L, 1);
+
+		/* Parse output_chain_first to output_chain and
+		 * output_chain_first. */
+		lua_pushstring(L, "output_chain_first");
+		lua_gettable(L, 3);
+		if (!lua_isnil(L, -1)) {
+			if (lua_isboolean(L, -1)) {
+				merger->output_chain = true;
+				merger->output_chain_first =
+					lua_toboolean(L, -1);
+			} else {
+				return start_usage_error(
+					L, "output_chain_first");
+			}
+		}
+		lua_pop(L, 1);
+
+		/* Parse output_chain_len. */
+		lua_pushstring(L, "output_chain_len");
+		lua_gettable(L, 3);
+		if (!lua_isnil(L, -1)) {
+			if (lua_isnumber(L, -1))
+				merger->output_chain_len =
+					(uint32_t) lua_tointeger(L, -1);
+			else
+				return start_usage_error(L, "output_chain_len");
+		}
+		lua_pop(L, 1);
+
+		/* Verify output_chain_len is provided when we
+		 * going to use it for output buffer header
+		 * encoding. */
+		if (merger->obuf != NULL && merger->output_chain_first &&
+		    merger->output_chain_len == 0)
+			return luaL_error(
+				L, "\"output_chain_len\" is mandatory when "
+				"\"buffer\" and \"output_chain_first\" are "
+				"used");
 	}
 
 	/* (Re)allocate sources array. */
@@ -425,11 +509,6 @@ lbox_merger_start(struct lua_State *L)
 	merger->sources = (struct source **) malloc(sources_size);
 	if (merger->sources == NULL)
 		throw_out_of_memory_error(L, sources_size, "merger->sources");
-
-	/* Counts only buffer inputs, but not function inputs,
-	 * because they sizes are unknown until the end. */
-	uint32_t buffer_result_len = 0;
-	bool has_function_source = false;
 
 	/* Fetch all sources. */
 	while (true) {
@@ -442,7 +521,7 @@ lbox_merger_start(struct lua_State *L)
 		if (lua_isfunction(L, -1)) {
 			/* Function input. */
 			source_type = SOURCE_TYPE_FUNCTION;
-			has_function_source = true;
+			merger->has_function_source = true;
 		} else if ((buf = check_ibuf(L, -1)) != NULL) {
 			/* Buffer input. */
 			source_type = SOURCE_TYPE_BUFFER;
@@ -485,13 +564,12 @@ lbox_merger_start(struct lua_State *L)
 		} else {
 			size_t *len_p =
 				&merger->sources[merger->count]->remain_len;
-			if (!skip_input_wrapper(buf, chain_input, chain_first,
-						len_p)) {
+			if (!decode_header(merger, buf, len_p)) {
 				free_sources(L, merger);
 				return luaL_error(L, "Invalid merge source");
 			}
 			merger->sources[merger->count]->input.buf = buf;
-			buffer_result_len += *len_p;
+			merger->buffer_result_len += *len_p;
 		}
 		merger->sources[merger->count]->tuple = NULL;
 		source_fetch(L, merger->sources[merger->count], merger->format);
@@ -503,9 +581,8 @@ lbox_merger_start(struct lua_State *L)
 		++merger->count;
 	}
 
-	if (obuf != NULL)
-		encode_result_buffer(L, merger, obuf, buffer_result_len,
-				     has_function_source);
+	if (merger->obuf != NULL)
+		encode_result_buffer(L, merger);
 
 	return 0;
 }

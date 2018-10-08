@@ -225,7 +225,7 @@ end
 local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     local opts = opts or {}
     local use_function_input = opts.use_function_input or false
-    local use_batch_input = opts.use_batch_input or false
+    local use_batch_io = opts.use_batch_io or false
 
     local tuples = {}
     local exp_result = {}
@@ -257,7 +257,7 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     -- Wrap tuples from each source into a table to imitate
     -- 'batch request': a request that return multiple select
     -- results. Here we have BATCH_SIZE select results.
-    if use_batch_input then
+    if use_batch_io then
         local new_tuples = {}
         for i = 1, sources_cnt do
             new_tuples[i] = {}
@@ -306,8 +306,8 @@ local function merger_opts_str(opts)
 
     if opts.use_function_input then
         table.insert(params, 'use_function_input')
-    elseif opts.use_batch_input then
-        table.insert(params, 'use_batch_input')
+    elseif opts.use_batch_io then
+        table.insert(params, 'use_batch_io')
     end
 
     if opts.use_buffer_output then
@@ -350,8 +350,26 @@ local function run_merger_internal(context)
             res[i] = res[i]:totable()
         end
     else
-        res = msgpackffi.decode(merger_start_opts[2].buffer.rpos)
-        res = res[IPROTO_DATA]
+        local obuf = merger_start_opts[2].buffer
+        local output_chain_first = merger_start_opts[2].output_chain_first
+        local output_chain_len = merger_start_opts[2].output_chain_len
+
+        if merger_start_opts[2].output_chain_first == nil then
+            local data, new_rpos = msgpackffi.decode(obuf.rpos)
+            obuf:read(new_rpos - obuf.rpos)
+            res = data[IPROTO_DATA]
+        elseif output_chain_first then
+            assert(type(output_chain_first) == 'boolean')
+            local data, new_rpos = msgpackffi.decode(obuf.rpos)
+            obuf:read(new_rpos - obuf.rpos)
+            assert(#data[IPROTO_DATA] == output_chain_len)
+            res = data[IPROTO_DATA][1]
+        else
+            assert(type(output_chain_first) == 'boolean')
+            local data, new_rpos = msgpackffi.decode(obuf.rpos)
+            obuf:read(new_rpos - obuf.rpos)
+            res = data
+        end
     end
 
     -- unicode_ci does not differentiate btw 'A' and 'a', so the
@@ -369,7 +387,7 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
     fiber.yield()
 
     local opts = opts or {}
-    local use_batch_input = opts.use_batch_input or false
+    local use_batch_io = opts.use_batch_io or false
 
     local inputs, exp_result =
         prepare_data(schema, tuples_cnt, sources_cnt, opts)
@@ -392,13 +410,26 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
         context.merger_start_opts[2].buffer = obuf
     end
 
-    if use_batch_input then
+    if use_batch_io then
         test:test('run chained mergers for batch select results', function(test)
             test:plan(BATCH_SIZE)
             context.test = test
             for i = 1, BATCH_SIZE do
-                local chain_first = i == 1
-                context.merger_start_opts[2].chain_first = chain_first
+                -- Set input_chain_first. */
+                local input_chain_first = i == 1
+                context.merger_start_opts[2].input_chain_first =
+                    input_chain_first
+                -- Set output_chain_{first,len}. */
+                if opts.use_buffer_output then
+                    context.merger_start_opts[2].output_chain_first =
+                        input_chain_first
+                    -- We should set output_chain_len to
+                    -- BATCH_SIZE, but we use 1 for the test,
+                    -- because it prevents run_merger_internal
+                    -- from msgpack decoding out of the
+                    -- intermediate result.
+                    context.merger_start_opts[2].output_chain_len = 1
+                end
                 -- Use different merger for one of results in the
                 -- batch.
                 if i == math.floor(BATCH_SIZE / 2) then
@@ -434,7 +465,7 @@ local function run_case(test, schema, opts)
 end
 
 local test = tap.test('merger')
-test:plan(11 + #schemas * 3 * 2)
+test:plan(12 + #schemas * 6)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -501,8 +532,11 @@ local merger_inst = merger.new({{
     type = 'string',
 }})
 local start_usage = 'start(merger, {buffer, buffer, ...}' ..
-    '[, {descending = <boolean> or <nil>, chain_first = <boolean> or <nil>, ' ..
-    'buffer = <cdata<struct ibuf>>}])'
+    '[, {descending = <boolean> or <nil>, ' ..
+    'input_chain_first = <boolean> or <nil>, ' ..
+    'buffer = <cdata<struct ibuf>>, ' ..
+    'output_chain_first = <boolean> or <nil>, ' ..
+    'output_chain_len = <number> or <nil>}])'
 
 -- Case: start() bad opts.
 local ok, err = pcall(merger_inst.start, merger_inst, {}, 1)
@@ -514,10 +548,12 @@ local ok, err = pcall(merger_inst.start, merger_inst, {}, {descending = 1})
 local exp_err = 'Bad param "descending", use: ' .. start_usage
 test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts.descending')
 
--- Case: start() bad opts.chain_first.
-local ok, err = pcall(merger_inst.start, merger_inst, {}, {chain_first = 1})
-local exp_err = 'Bad param "chain_first", use: ' .. start_usage
-test:is_deeply({ok, err}, {false, exp_err}, 'start() bad opts.chain_first')
+-- Case: start() bad opts.input_chain_first.
+local ok, err = pcall(merger_inst.start, merger_inst, {},
+    {input_chain_first = 1})
+local exp_err = 'Bad param "input_chain_first", use: ' .. start_usage
+test:is_deeply({ok, err}, {false, exp_err},
+    'start() bad opts.input_chain_first')
 
 -- Case: start() bad buffer.
 local ok, err = pcall(merger_inst.start, merger_inst, {1})
@@ -529,18 +565,25 @@ local ok, err = pcall(merger_inst.start, merger_inst, {ffi.new('char *')})
 local exp_err = 'Unknown input type at index 1'
 test:is_deeply({ok, err}, {false, exp_err}, 'start() bad cdata buffer')
 
+-- Case: start() missed output_chain_len.
+local ok, err = pcall(merger_inst.start, merger_inst, {},
+    {buffer = buffer.ibuf(), output_chain_first = true})
+local exp_err = '"output_chain_len" is mandatory when "buffer" and ' ..
+    '"output_chain_first" are used'
+test:is_deeply({ok, err}, {false, exp_err}, 'start() missed output_chain_len')
+
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
-    for _, use_batch_input in ipairs({false, true}) do
+    for _, use_batch_io in ipairs({false, true}) do
         for _, use_buffer_output in ipairs({false, true}) do
             for _, schema in ipairs(schemas) do
                 -- These options are mutually exclusive.
-                if use_function_input and use_batch_input then
+                if use_function_input and use_batch_io then
                     goto continue
                 end
                 local opts = {
                     use_function_input = use_function_input,
-                    use_batch_input = use_batch_input,
+                    use_batch_io = use_batch_io,
                     use_buffer_output = use_buffer_output,
                 }
                 run_case(test, schema, opts)
