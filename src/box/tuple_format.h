@@ -35,6 +35,7 @@
 #include "field_def.h"
 #include "errinj.h"
 #include "tuple_dictionary.h"
+#include "json/tree.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -108,6 +109,10 @@ struct tuple_field {
 	bool is_key_part;
 	/** True, if a field can store NULL. */
 	bool is_nullable;
+	/** JSON path tree max depth. */
+	uint32_t path_tree_depth;
+	/** JSON root path tree node for registered indexes. */
+	struct json_tree_node path_tree_node;
 };
 
 /**
@@ -157,6 +162,14 @@ struct tuple_format {
 	uint32_t min_field_count;
 	/* Length of 'fields' array. */
 	uint32_t field_count;
+	/** Size of format allocation. */
+	uint32_t allocation_size;
+	/**
+	 * Maximum depth of JSON path tree. This value is used to
+	 * allocate stack that used in pre order JSON path tree
+	 * traversal.
+	 */
+	uint32_t max_path_tree_depth;
 	/**
 	 * Shared names storage used by all formats of a space.
 	 */
@@ -388,6 +401,38 @@ tuple_field_raw_by_name(struct tuple_format *format, const char *tuple,
 }
 
 /**
+ * Retrieve field data by JSON path.
+ * @param field Pointer to msgpack with data.
+ * @param path The path to process.
+ * @param path_len The length of the @path.
+ * @retval 0 On success.
+ * @retval >0 On path parsing error, invalid character position.
+ */
+int
+tuple_field_by_relative_path(const char **field, const char *path,
+			     uint32_t path_len);
+
+/**
+ * Make tuple parsing doing JSON tree traversal. Make types
+ * validations. Init field_map for fields that have offset_slots.
+ * @param field Root field of path tree.
+ * @param field_raw Pointer to field data.
+ * @param tuple_raw Pointer to tuple data.
+ *                  May be NULL when field_map is NULL.
+ * @param fieldno Number of root field in tuple.
+ * @param field_map[out] Tuple field map to initialize.
+ *                       May be NULL if initialization is not
+ *                       required.
+ * @param off_stack Stack of intermediate nodes offsets.
+ * @retval 0  On success.
+ * @retval -1 On memory allocation or field parsing error.
+ */
+int
+tuple_field_tree_parse_raw(struct tuple_field *field, const char *field_raw,
+			   const char *tuple_raw, uint32_t fieldno,
+			   uint32_t *field_map, const char **off_stack);
+
+/**
  * Get tuple field by its path.
  * @param format Tuple format.
  * @param tuple MessagePack tuple's body.
@@ -414,11 +459,25 @@ tuple_field_raw_by_path(struct tuple_format *format, const char *tuple,
  * @param part Index part to use.
  * @retval Field data if the field exists or NULL.
  */
-static inline const char *
+const char *
 tuple_field_by_part_raw(const struct tuple_format *format, const char *data,
-			const uint32_t *field_map, struct key_part *part)
+			const uint32_t *field_map, struct key_part *part);
+
+/**
+ * Lookup JSON path in tuple_field JSON paths tree.
+ * @param field Tuple field with JSON tree root.
+ * @param path JSON path string to lookup.
+ * @param path_len Length of path.
+ * @retval not NULL tuple_field pointer on success.
+ * @retval NULL On nothing has been found.
+ */
+static inline struct tuple_field *
+tuple_field_tree_lookup(struct tuple_field *field, const char *path,
+			uint32_t path_len)
 {
-	return tuple_field_raw(format, data, field_map, part->fieldno);
+	return json_tree_lookup_entry_by_path(field, path, path_len,
+					     struct tuple_field,
+					     path_tree_node);
 }
 
 #if defined(__cplusplus)

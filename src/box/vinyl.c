@@ -975,6 +975,8 @@ vinyl_index_def_change_requires_rebuild(struct index *index,
 			return true;
 		if (!field_type1_contains_type2(new_part->type, old_part->type))
 			return true;
+		if (key_part_path_cmp(old_part, new_part) != 0)
+			return true;
 	}
 	return false;
 }

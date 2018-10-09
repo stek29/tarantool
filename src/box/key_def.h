@@ -54,6 +54,8 @@ struct key_part_def {
 	uint32_t coll_id;
 	/** True if a key part can store NULLs. */
 	bool is_nullable;
+	/** JSON path to data. */
+	const char *path;
 };
 
 extern const struct key_part_def key_part_def_default;
@@ -76,6 +78,13 @@ struct key_part {
 	struct coll *coll;
 	/** True if a part can store NULLs. */
 	bool is_nullable;
+	/**
+	 * JSON path to data in 'canonical' form.
+	 * Read json_path_normalize to get more details.
+	 */
+	char *path;
+	/** The length of JSON path. */
+	uint32_t path_len;
 };
 
 struct key_def;
@@ -130,6 +139,8 @@ struct key_def {
 	uint32_t unique_part_count;
 	/** True, if at least one part can store NULL. */
 	bool is_nullable;
+	/** True, if some key part has JSON path. */
+	bool has_json_paths;
 	/**
 	 * True, if some key parts can be absent in a tuple. These
 	 * fields assumed to be MP_NIL.
@@ -223,9 +234,10 @@ box_tuple_compare_with_key(const box_tuple_t *tuple_a, const char *key_b,
 /** \endcond public */
 
 static inline size_t
-key_def_sizeof(uint32_t part_count)
+key_def_sizeof(uint32_t part_count, uint32_t paths_size)
 {
-	return sizeof(struct key_def) + sizeof(struct key_part) * part_count;
+	return sizeof(struct key_def) + sizeof(struct key_part) * part_count +
+	       paths_size;
 }
 
 /**
@@ -238,8 +250,9 @@ key_def_new(const struct key_part_def *parts, uint32_t part_count);
 /**
  * Dump part definitions of the given key def.
  */
-void
-key_def_dump_parts(const struct key_def *def, struct key_part_def *parts);
+int
+key_def_dump_parts(struct region *pool, const struct key_def *def,
+		   struct key_part_def *parts);
 
 /**
  * Update 'has_optional_parts' of @a key_def with correspondence
@@ -351,6 +364,8 @@ key_validate_parts(const struct key_def *key_def, const char *key,
 static inline bool
 key_def_is_sequential(const struct key_def *key_def)
 {
+	if (key_def->has_json_paths)
+		return false;
 	for (uint32_t part_id = 0; part_id < key_def->part_count; part_id++) {
 		if (key_def->parts[part_id].fieldno != part_id)
 			return false;
@@ -399,6 +414,14 @@ key_mp_type_validate(enum field_type key_type, enum mp_type mp_type,
 		return -1;
 	}
 	return 0;
+}
+
+static inline int
+key_part_path_cmp(const struct key_part *part1, const struct key_part *part2)
+{
+	if (part1->path_len != part2->path_len)
+		return part1->path_len - part2->path_len;
+	return memcmp(part1->path, part2->path, part1->path_len);
 }
 
 /**

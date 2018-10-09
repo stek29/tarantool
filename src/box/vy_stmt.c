@@ -29,6 +29,7 @@
  * SUCH DAMAGE.
  */
 
+#include "assoc.h"
 #include "vy_stmt.h"
 
 #include <stdlib.h>
@@ -349,6 +350,103 @@ vy_stmt_replace_from_upsert(const struct tuple *upsert)
 	return replace;
 }
 
+/**
+ * Construct tuple field or calculate it's size. The fields_iov_ht
+ * is a hashtable that links leaf field records of field path
+ * tree and iovs that contain raw data. Function also fills the
+ * tuple field_map when write_data flag is set true.
+ */
+static void
+tuple_field_restore_raw(struct tuple_field *field, char *tuple_raw,
+			uint32_t *field_map, char **offset,
+			struct mh_i64ptr_t *fields_iov_ht, bool write_data)
+{
+	struct tuple_field *prev = NULL;
+	struct tuple_field *curr;
+	json_tree_foreach_entry_pre(curr, field, path_tree_node) {
+		struct json_tree_node *curr_node = &curr->path_tree_node;
+		uint32_t children_count =
+			json_tree_node_children_count(curr_node);
+		struct tuple_field *parent =
+			curr_node->parent == NULL ? NULL :
+			json_tree_entry(curr_node->parent, struct tuple_field,
+					path_tree_node);
+		if (parent != NULL && parent->type == FIELD_TYPE_ARRAY){
+			/*
+			 * Fill unindexed array items with nulls.
+			 * Gaps size calculated as a difference
+			 * between sibling nodes.
+			 */
+			uint32_t nulls_count = curr_node->key.num - 1;
+			if (prev != parent) {
+				struct json_tree_node *prev_node =
+					rlist_prev_entry(curr_node, sibling);
+				assert(prev_node != NULL);
+				nulls_count -= prev_node->key.num;
+			}
+			for (uint32_t i = 0; i < nulls_count; i++) {
+				*offset = !write_data ?
+					  (*offset += mp_sizeof_nil()) :
+					  mp_encode_nil(*offset);
+			}
+		} else if (parent != NULL && parent->type == FIELD_TYPE_MAP) {
+			const char *str = curr_node->key.str;
+			uint32_t len = curr_node->key.len;
+			*offset = !write_data ?
+				  (*offset += mp_sizeof_str(len)) :
+				  mp_encode_str(*offset, str, len);
+		}
+		/* Fill data. */
+		if (curr->type == FIELD_TYPE_ARRAY) {
+			/*
+			 * As numeric records list is sorted in
+			 * ascending order in JSON tree, last
+			 * entry contain the biggest number
+			 * matching the size of the array.
+			 */
+			assert(children_count > 0);
+			struct json_tree_node *max_idx_node =
+				rlist_last_entry(&curr_node->children,
+						 struct json_tree_node,
+						 sibling);
+			uint32_t array_size = max_idx_node->key.num;
+			assert(array_size > 0);
+			*offset = !write_data ?
+				  (*offset += mp_sizeof_array(array_size)) :
+				  mp_encode_array(*offset, array_size);
+		} else if (curr->type == FIELD_TYPE_MAP) {
+			assert(children_count > 0);
+			*offset = !write_data ?
+				  (*offset += mp_sizeof_map(children_count)) :
+				  mp_encode_map(*offset, children_count);
+		} else {
+			/* Leaf record. */
+			assert(children_count == 0);
+			mh_int_t k = mh_i64ptr_find(fields_iov_ht,
+						    (uint64_t)curr, NULL);
+			struct iovec *iov =
+				k != mh_end(fields_iov_ht) ?
+				mh_i64ptr_node(fields_iov_ht, k)->val : NULL;
+			if (iov == NULL) {
+				*offset = !write_data ?
+					  (*offset += mp_sizeof_nil()) :
+					  mp_encode_nil(*offset);
+			} else {
+				uint32_t data_offset = *offset - tuple_raw;
+				int32_t slot = curr->offset_slot;
+				if (write_data) {
+					memcpy(*offset, iov->iov_base,
+					       iov->iov_len);
+					if (slot != TUPLE_OFFSET_SLOT_NIL)
+						field_map[slot] = data_offset;
+				}
+				*offset += iov->iov_len;
+			}
+		}
+		prev = curr;
+	}
+}
+
 static struct tuple *
 vy_stmt_new_surrogate_from_key(const char *key, enum iproto_type type,
 			       const struct key_def *cmp_def,
@@ -357,51 +455,83 @@ vy_stmt_new_surrogate_from_key(const char *key, enum iproto_type type,
 	/* UPSERT can't be surrogate. */
 	assert(type != IPROTO_UPSERT);
 	struct region *region = &fiber()->gc;
+	struct tuple *stmt = NULL;
 
 	uint32_t field_count = format->index_field_count;
-	struct iovec *iov = region_alloc(region, sizeof(*iov) * field_count);
-	if (iov == NULL) {
-		diag_set(OutOfMemory, sizeof(*iov) * field_count,
-			 "region", "iov for surrogate key");
-		return NULL;
-	}
-	memset(iov, 0, sizeof(*iov) * field_count);
 	uint32_t part_count = mp_decode_array(&key);
 	assert(part_count == cmp_def->part_count);
-	assert(part_count <= field_count);
-	uint32_t nulls_count = field_count - cmp_def->part_count;
-	uint32_t bsize = mp_sizeof_array(field_count) +
-			 mp_sizeof_nil() * nulls_count;
-	for (uint32_t i = 0; i < part_count; ++i) {
-		const struct key_part *part = &cmp_def->parts[i];
+	struct iovec *iov = region_alloc(region, sizeof(*iov) * part_count);
+	if (iov == NULL) {
+		diag_set(OutOfMemory, sizeof(*iov) * part_count, "region",
+			"iov for surrogate key");
+		return NULL;
+	}
+	/* Hastable linking leaf field and corresponding iov. */
+	struct mh_i64ptr_t *fields_iov_ht = mh_i64ptr_new();
+	if (fields_iov_ht == NULL) {
+		diag_set(OutOfMemory, sizeof(struct mh_i64ptr_t),
+			 "mh_i64ptr_new", "fields_iov_ht");
+		return NULL;
+	}
+	if (mh_i64ptr_reserve(fields_iov_ht, part_count, NULL) != 0) {
+		diag_set(OutOfMemory, part_count, "mh_i64ptr_reserve",
+			 "fields_iov_ht");
+		goto end;
+	}
+	uint32_t bsize = mp_sizeof_array(field_count);
+	uint32_t nulls_count = field_count;
+	memset(iov, 0, sizeof(*iov) * part_count);
+	const struct key_part *part = cmp_def->parts;
+	for (uint32_t i = 0; i < part_count; ++i, ++part) {
 		assert(part->fieldno < field_count);
 		const char *svp = key;
-		iov[part->fieldno].iov_base = (char *) key;
+		iov[i].iov_base = (char *) key;
 		mp_next(&key);
-		iov[part->fieldno].iov_len = key - svp;
-		bsize += key - svp;
+		iov[i].iov_len = key - svp;
+		struct tuple_field *field;
+		if (part->path == NULL) {
+			field = &format->fields[part->fieldno];
+			--nulls_count;
+		} else {
+			struct tuple_field *root_field =
+				&format->fields[part->fieldno];
+			field = tuple_field_tree_lookup(root_field, part->path,
+							part->path_len);
+			assert(field != NULL);
+		}
+		struct mh_i64ptr_node_t node = {(uint64_t)field, &iov[i]};
+		mh_int_t k = mh_i64ptr_put(fields_iov_ht, &node, NULL, NULL);
+		if (unlikely(k == mh_end(fields_iov_ht))) {
+			diag_set(OutOfMemory, part_count, "mh_i64ptr_put",
+				 "fields_iov_ht");
+			goto end;
+		}
+		k = mh_i64ptr_find(fields_iov_ht, (uint64_t)field, NULL);
+		assert(k != mh_end(fields_iov_ht));
+	}
+	/* Calculate tuple size to make allocation. */
+	for (uint32_t i = 0; i < field_count; ++i) {
+		char *data = NULL;
+		tuple_field_restore_raw(&format->fields[i], NULL, NULL, &data,
+					fields_iov_ht, false);
+		bsize += data - (char *)NULL;
 	}
 
-	struct tuple *stmt = vy_stmt_alloc(format, bsize);
+	stmt = vy_stmt_alloc(format, bsize);
 	if (stmt == NULL)
-		return NULL;
+		goto end;
 
 	char *raw = (char *) tuple_data(stmt);
 	uint32_t *field_map = (uint32_t *) raw;
 	char *wpos = mp_encode_array(raw, field_count);
 	for (uint32_t i = 0; i < field_count; ++i) {
-		const struct tuple_field *field = &format->fields[i];
-		if (field->offset_slot != TUPLE_OFFSET_SLOT_NIL)
-			field_map[field->offset_slot] = wpos - raw;
-		if (iov[i].iov_base == NULL) {
-			wpos = mp_encode_nil(wpos);
-		} else {
-			memcpy(wpos, iov[i].iov_base, iov[i].iov_len);
-			wpos += iov[i].iov_len;
-		}
+		tuple_field_restore_raw(&format->fields[i], raw, field_map,
+					&wpos, fields_iov_ht, true);
 	}
-	assert(wpos == raw + bsize);
+	assert(wpos <= raw + bsize);
 	vy_stmt_set_type(stmt, type);
+end:
+	mh_i64ptr_delete(fields_iov_ht);
 	return stmt;
 }
 

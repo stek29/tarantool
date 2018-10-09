@@ -196,8 +196,6 @@ vy_point_lookup(struct vy_lsm *lsm, struct vy_tx *tx,
 		const struct vy_read_view **rv,
 		struct tuple *key, struct tuple **ret)
 {
-	assert(tuple_field_count(key) >= lsm->cmp_def->part_count);
-
 	*ret = NULL;
 	double start_time = ev_monotonic_now(loop());
 	int rc = 0;

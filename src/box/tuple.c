@@ -161,10 +161,21 @@ tuple_validate_raw(struct tuple_format *format, const char *tuple)
 	struct tuple_field *field = &format->fields[0];
 	uint32_t i = 0;
 	uint32_t defined_field_count = MIN(field_count, format->field_count);
+	size_t off_stack_size =
+		format->max_path_tree_depth * sizeof(const char *);
+	const char **off_stack = region_alloc(&fiber()->gc, off_stack_size);
+	if (off_stack == NULL) {
+		diag_set(OutOfMemory, off_stack_size, "region_alloc",
+			 "off_stack");
+		return -1;
+	}
 	for (; i < defined_field_count; ++i, ++field) {
-		if (key_mp_type_validate(field->type, mp_typeof(*tuple),
-					 ER_FIELD_TYPE, i + TUPLE_INDEX_BASE,
-					 field->is_nullable))
+		/*
+		 * Don't fill field_map, just make types
+		 * validations.
+		 */
+		if (tuple_field_tree_parse_raw(field, tuple, NULL, i, NULL,
+					       off_stack) != 0)
 			return -1;
 		mp_next(&tuple);
 	}

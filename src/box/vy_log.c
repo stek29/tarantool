@@ -711,7 +711,8 @@ vy_log_record_dup(struct region *pool, const struct vy_log_record *src)
 				 "struct key_part_def");
 			goto err;
 		}
-		key_def_dump_parts(src->key_def, dst->key_parts);
+		if (key_def_dump_parts(pool, src->key_def, dst->key_parts) != 0)
+			goto err;
 		dst->key_part_count = src->key_def->part_count;
 		dst->key_def = NULL;
 	}
