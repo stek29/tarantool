@@ -242,3 +242,28 @@ json_path_next(struct json_path_parser *parser, struct json_path_node *node)
 		return json_parse_identifier(parser, node);
 	}
 }
+
+int
+json_path_normalize(const char *path, uint32_t path_len, char *out)
+{
+	struct json_path_parser parser;
+	struct json_path_node node;
+	json_path_parser_create(&parser, path, path_len);
+	int rc;
+	while ((rc = json_path_next(&parser, &node)) == 0 &&
+		node.type != JSON_PATH_END) {
+		if (node.type == JSON_PATH_NUM) {
+			out += sprintf(out, "[%llu]",
+				      (unsigned long long)node.num);
+		} else if (node.type == JSON_PATH_STR) {
+			out += sprintf(out, "[\"%.*s\"]", node.len, node.str);
+		} else {
+			unreachable();
+		}
+	};
+	if (rc != 0)
+		return rc;
+	*out = '\0';
+	assert(node.type == JSON_PATH_END);
+	return 0;
+}

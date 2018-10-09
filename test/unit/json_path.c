@@ -360,15 +360,54 @@ test_tree()
 	footer();
 }
 
+void
+test_normalize_path()
+{
+	header();
+	plan(8);
+
+	const char *path_normalized = "[\"FIO\"][3][\"fname\"]";
+	const char *path1 = "FIO[3].fname";
+	const char *path2 = "[\"FIO\"][3].fname";
+	const char *path3 = "FIO[3][\"fname\"]";
+	char buff[strlen(path_normalized) + 1];
+	int rc;
+
+	rc = json_path_normalize(path_normalized, strlen(path_normalized),
+				 buff);
+	is(rc, 0, "normalize '%s' path status", path_normalized);
+	is(strcmp(buff, path_normalized), 0, "normalize '%s' path compare",
+		  path_normalized);
+
+	rc = json_path_normalize(path1, strlen(path1), buff);
+	is(rc, 0, "normalize '%s' path status", path1);
+	is(strcmp(buff, path_normalized), 0, "normalize '%s' path compare",
+		  path1);
+
+	rc = json_path_normalize(path2, strlen(path2), buff);
+	is(rc, 0, "normalize '%s' path status", path2);
+	is(strcmp(buff, path_normalized), 0, "normalize '%s' path compare",
+		  path2);
+
+	rc = json_path_normalize(path3, strlen(path3), buff);
+	is(rc, 0, "normalize '%s' path status", path3);
+	is(strcmp(buff, path_normalized), 0, "normalize '%s' path compare",
+		  path3);
+
+	check_plan();
+	footer();
+}
+
 int
 main()
 {
 	header();
-	plan(3);
+	plan(4);
 
 	test_basic();
 	test_errors();
 	test_tree();
+	test_normalize_path();
 
 	int rc = check_plan();
 	footer();

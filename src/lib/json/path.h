@@ -105,6 +105,24 @@ json_path_parser_create(struct json_path_parser *parser, const char *src,
 int
 json_path_next(struct json_path_parser *parser, struct json_path_node *node);
 
+/**
+ * Convert path to the 'canonical' form:
+ *  - all maps keys are specified with operator ["key"] form
+ *  - all array indexes are specified with operator [i] form.
+ * This notation is preferable because in the general case it can
+ * be uniquely parsed.
+ * @param path Source path string to be converted.
+ * @param path_len The length of the @path.
+ * @param[out] out Memory to store normalized string.
+ *                 The worst-case scenario require
+ *                 2.5 * path_len + 1 buffer.
+ * @retval 0 On success.
+ * @retval > 0 Position of a syntax error. A position is 1-based
+ *             and starts from a beginning of a source string.
+ */
+int
+json_path_normalize(const char *path, uint32_t path_len, char *out);
+
 #ifdef __cplusplus
 }
 #endif
