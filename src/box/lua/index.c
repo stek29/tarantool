@@ -35,6 +35,9 @@
 #include "box/info.h"
 #include "box/lua/info.h"
 #include "box/lua/tuple.h"
+#include "box/schema.h"
+#include "box/tuple_format.h"
+#include "json/path.h"
 #include "box/lua/misc.h" /* lbox_encode_tuple_on_gc() */
 
 /** {{{ box.index Lua library: access to spaces and indexes
@@ -328,6 +331,62 @@ lbox_index_compact(lua_State *L)
 	return 0;
 }
 
+static int
+lbox_index_resolve_path(struct lua_State *L)
+{
+	if (lua_gettop(L) != 3 ||
+	    !lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isstring(L, 3)) {
+		return luaL_error(L, "Usage box.internal."
+				     "path_resolve(part_id, space_id, path)");
+	}
+	uint32_t part_id = lua_tonumber(L, 1);
+	uint32_t space_id = lua_tonumber(L, 2);
+	size_t path_len;
+	const char *path = lua_tolstring(L, 3, &path_len);
+	struct space *space = space_cache_find(space_id);
+	if (space == NULL)
+		return luaT_error(L);
+	struct json_path_parser parser;
+	struct json_path_node node;
+	json_path_parser_create(&parser, path, path_len);
+	int rc = json_path_next(&parser, &node);
+	if (rc != 0) {
+		const char *err_msg =
+			tt_sprintf("options.parts[%d]: error in path on "
+				   "position %d", part_id, rc);
+		diag_set(ClientError, ER_ILLEGAL_PARAMS, err_msg);
+		return luaT_error(L);
+	}
+	assert(space->format != NULL && space->format->dict != NULL);
+	uint32_t fieldno;
+	if (node.type == JSON_PATH_NUM &&
+	    (fieldno = node.num - TUPLE_INDEX_BASE) >=
+	    space->format->field_count) {
+		const char *err_msg =
+			tt_sprintf("options.parts[%d]: field '%d' referenced "
+				   "in path is greater than format field "
+				   "count %d", part_id,
+				   fieldno + TUPLE_INDEX_BASE,
+				   space->format->field_count);
+		diag_set(ClientError, ER_ILLEGAL_PARAMS, err_msg);
+		return luaT_error(L);
+	} else if (node.type == JSON_PATH_STR &&
+		   tuple_fieldno_by_name(space->format->dict, node.str, node.len,
+					 field_name_hash(node.str, node.len),
+					 &fieldno) != 0) {
+		const char *err_msg =
+			tt_sprintf("options.parts[%d]: field was not found by "
+				   "name '%.*s'", part_id, node.len, node.str);
+		diag_set(ClientError, ER_ILLEGAL_PARAMS, err_msg);
+		return luaT_error(L);
+	}
+	fieldno += TUPLE_INDEX_BASE;
+	path += parser.offset;
+	lua_pushnumber(L, fieldno);
+	lua_pushstring(L, path);
+	return 2;
+}
+
 /* }}} */
 
 void
@@ -365,6 +424,7 @@ box_lua_index_init(struct lua_State *L)
 		{"truncate", lbox_truncate},
 		{"stat", lbox_index_stat},
 		{"compact", lbox_index_compact},
+		{"path_resolve", lbox_index_resolve_path},
 		{NULL, NULL}
 	};
 

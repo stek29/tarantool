@@ -1002,6 +1002,47 @@ assert(idx ~= nil)
 ---
 - true
 ...
+format = {{'int1', 'unsigned'}, {'int2', 'unsigned'}, {'data', 'array'}, {'int3', 'unsigned'}, {'int4', 'unsigned'}}
+---
+...
+s:format(format)
+---
+- error: Field 3 has type 'map' in one index, but type 'array' in another
+...
+format = {{'int1', 'unsigned'}, {'int2', 'unsigned'}, {'data', 'map'}, {'int3', 'unsigned'}, {'int4', 'unsigned'}}
+---
+...
+s:format(format)
+---
+...
+s:create_index('test3', {parts = {{2, 'number'}, {']sad.FIO["fname"]', 'str'}}})
+---
+- error: 'Illegal parameters, options.parts[2]: error in path on position 1'
+...
+s:create_index('test3', {parts = {{2, 'number'}, {'[666].FIO["fname"]', 'str'}}})
+---
+- error: 'Illegal parameters, options.parts[2]: field ''666'' referenced in path is
+    greater than format field count 5'
+...
+s:create_index('test3', {parts = {{2, 'number'}, {'invalid.FIO["fname"]', 'str'}}})
+---
+- error: 'Illegal parameters, options.parts[2]: field was not found by name ''invalid'''
+...
+idx3 = s:create_index('test3', {parts = {{2, 'number'}, {'data.FIO["fname"]', 'str'}}})
+---
+...
+assert(idx3 ~= nil)
+---
+- true
+...
+assert(idx3.parts[2].path == "[\"FIO\"][\"fname\"]")
+---
+- true
+...
+-- Vinyl has optimizations that omit index checks, so errors could differ.
+idx3:drop()
+---
+...
 s:insert{7, 7, {town = 'London', FIO = 666}, 4, 5}
 ---
 - error: 'Tuple field 3 type does not match one required by operation: expected map'

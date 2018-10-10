@@ -556,7 +556,7 @@ local function update_index_parts_1_6_0(parts)
     return result
 end
 
-local function update_index_parts(format, parts)
+local function update_index_parts(format, parts, space_id)
     if type(parts) ~= "table" then
         box.error(box.error.ILLEGAL_PARAMS,
         "options.parts parameter should be a table")
@@ -607,16 +607,16 @@ local function update_index_parts(format, parts)
             box.error(box.error.ILLEGAL_PARAMS,
                       "options.parts[" .. i .. "]: field (name or number) is expected")
         elseif type(part.field) == 'string' then
-            for k,v in pairs(format) do
-                if v.name == part.field then
-                    part.field = k
-                    break
-                end
-            end
-            if type(part.field) == 'string' then
+            local idx, path = box.internal.path_resolve(i, space_id, part.field)
+            if part.path ~= nil and part.path ~= path then
                 box.error(box.error.ILLEGAL_PARAMS,
-                          "options.parts[" .. i .. "]: field was not found by name '" .. part.field .. "'")
+                          "options.parts[" .. i .. "]: field path '"..
+                          part.path.." doesn't math path resolved by name '" ..
+                          part.field .. "'")
             end
+            parts_can_be_simplified = parts_can_be_simplified and path == nil
+            part.field = idx
+            part.path = path or part.path
         elseif part.field == 0 then
             box.error(box.error.ILLEGAL_PARAMS,
                       "options.parts[" .. i .. "]: field (number) must be one-based")
@@ -767,7 +767,7 @@ box.schema.index.create = function(space_id, name, options)
         end
     end
     local parts, parts_can_be_simplified =
-        update_index_parts(format, options.parts)
+        update_index_parts(format, options.parts, space_id)
     -- create_index() options contains type, parts, etc,
     -- stored separately. Remove these members from index_opts
     local index_opts = {
@@ -934,7 +934,7 @@ box.schema.index.alter = function(space_id, index_id, options)
     if options.parts then
         local parts_can_be_simplified
         parts, parts_can_be_simplified =
-            update_index_parts(format, options.parts)
+            update_index_parts(format, options.parts, space_id)
         -- save parts in old format if possible
         if parts_can_be_simplified then
             parts = simplify_index_parts(parts)

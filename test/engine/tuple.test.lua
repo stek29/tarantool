@@ -326,6 +326,18 @@ s:create_index('test1', {parts = {{2, 'number'}, {3, 'str', path = '[1].sname'},
 s:create_index('test1', {parts = {{2, 'number'}, {3, 'str', path = 'FIO....fname'}}})
 idx = s:create_index('test1', {parts = {{2, 'number'}, {3, 'str', path = '["FIO"]["fname"]'}, {3, 'str', path = '["FIO"]["sname"]'}}})
 assert(idx ~= nil)
+format = {{'int1', 'unsigned'}, {'int2', 'unsigned'}, {'data', 'array'}, {'int3', 'unsigned'}, {'int4', 'unsigned'}}
+s:format(format)
+format = {{'int1', 'unsigned'}, {'int2', 'unsigned'}, {'data', 'map'}, {'int3', 'unsigned'}, {'int4', 'unsigned'}}
+s:format(format)
+s:create_index('test3', {parts = {{2, 'number'}, {']sad.FIO["fname"]', 'str'}}})
+s:create_index('test3', {parts = {{2, 'number'}, {'[666].FIO["fname"]', 'str'}}})
+s:create_index('test3', {parts = {{2, 'number'}, {'invalid.FIO["fname"]', 'str'}}})
+idx3 = s:create_index('test3', {parts = {{2, 'number'}, {'data.FIO["fname"]', 'str'}}})
+assert(idx3 ~= nil)
+assert(idx3.parts[2].path == "[\"FIO\"][\"fname\"]")
+-- Vinyl has optimizations that omit index checks, so errors could differ.
+idx3:drop()
 s:insert{7, 7, {town = 'London', FIO = 666}, 4, 5}
 s:insert{7, 7, {town = 'London', FIO = {fname = 666, sname = 'Bond'}}, 4, 5}
 s:insert{7, 7, {town = 'London', FIO = {fname = "James"}}, 4, 5}
