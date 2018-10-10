@@ -363,12 +363,17 @@ __asm__ volatile(
 #endif
 }
 
+typedef void (*coro_unwcontext_indirect_f)(unw_context_t *unw_context,
+					   struct coro_context *coro_ctx);
+/* Variable to process coro_unwcontext indirect call to avoid inlining. */
+static volatile coro_unwcontext_indirect_f coro_unwcontext_indirect = coro_unwcontext;
+
 void
 backtrace_foreach(backtrace_cb cb, coro_context *coro_ctx, void *cb_ctx)
 {
 	unw_cursor_t unw_cur;
 	unw_context_t unw_ctx;
-	coro_unwcontext(&unw_ctx, coro_ctx);
+	coro_unwcontext_indirect(&unw_ctx, coro_ctx);
 	unw_init_local(&unw_cur, &unw_ctx);
 	int frame_no = 0;
 	unw_word_t sp = 0, old_sp = 0, ip, offset;
