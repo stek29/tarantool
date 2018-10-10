@@ -366,6 +366,8 @@ s:create_index('test2', {parts = {{2, 'number'}, {3, 'number', path = '["FIO"]["
 idx2 = s:create_index('test2', {parts = {{2, 'number'}, {3, 'str', path = '["FIO"]["fname"]'}}})
 assert(idx2 ~= nil)
 t = s:insert{5, 7, {town = 'Matrix', FIO = {fname = 'Agent', sname = 'Smith'}}, 4, 5}
+-- Test field_map in tuple speed-up access by indexed path.
+t["[3][\"FIO\"][\"fname\"]"]
 idx:select()
 idx:min()
 idx:max()

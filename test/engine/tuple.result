@@ -1142,6 +1142,11 @@ assert(idx2 ~= nil)
 t = s:insert{5, 7, {town = 'Matrix', FIO = {fname = 'Agent', sname = 'Smith'}}, 4, 5}
 ---
 ...
+-- Test field_map in tuple speed-up access by indexed path.
+t["[3][\"FIO\"][\"fname\"]"]
+---
+- Agent
+...
 idx:select()
 ---
 - - [5, 7, {'town': 'Matrix', 'FIO': {'fname': 'Agent', 'sname': 'Smith'}}, 4, 5]
