@@ -578,7 +578,7 @@ vinyl_engine_check_space_def(struct space_def *def)
 
 static struct space *
 vinyl_engine_create_space(struct engine *engine, struct space_def *def,
-			  struct rlist *key_list)
+			  struct rlist *key_list, uint64_t epoch)
 {
 	struct space *space = malloc(sizeof(*space));
 	if (space == NULL) {
@@ -604,7 +604,8 @@ vinyl_engine_create_space(struct engine *engine, struct space_def *def,
 
 	struct tuple_format *format =
 		tuple_format_new(&vy_tuple_format_vtab, keys, key_count, 0,
-				 def->fields, def->field_count, def->dict);
+				 def->fields, def->field_count, def->dict,
+				 epoch);
 	if (format == NULL) {
 		free(space);
 		return NULL;
@@ -3025,7 +3026,7 @@ vy_send_lsm(struct vy_join_ctx *ctx, struct vy_lsm_recovery_info *lsm_info)
 	if (ctx->key_def == NULL)
 		goto out;
 	ctx->format = tuple_format_new(&vy_tuple_format_vtab, &ctx->key_def,
-				       1, 0, NULL, 0, NULL);
+				       1, 0, NULL, 0, NULL, 0);
 	if (ctx->format == NULL)
 		goto out_free_key_def;
 	tuple_format_ref(ctx->format);

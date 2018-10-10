@@ -61,7 +61,7 @@ vy_lsm_env_create(struct vy_lsm_env *env, const char *path,
 		  void *upsert_thresh_arg)
 {
 	env->key_format = tuple_format_new(&vy_tuple_format_vtab,
-					   NULL, 0, 0, NULL, 0, NULL);
+					   NULL, 0, 0, NULL, 0, NULL, 0);
 	if (env->key_format == NULL)
 		return -1;
 	tuple_format_ref(env->key_format);
@@ -155,9 +155,45 @@ vy_lsm_new(struct vy_lsm_env *lsm_env, struct vy_cache_env *cache_env,
 	} else {
 		lsm->disk_format = tuple_format_new(&vy_tuple_format_vtab,
 						    &cmp_def, 1, 0, NULL, 0,
-						    NULL);
+						    NULL, format->epoch);
 		if (lsm->disk_format == NULL)
 			goto fail_format;
+		/*
+		 * Tuple formats should be compatible to make
+		 * epoch-based caching work.
+		 */
+		int32_t min_offset_slot = 0;
+		struct tuple_field *dst_fields = lsm->disk_format->fields;
+		struct tuple_field *src_fields = format->fields;
+		struct key_part *part = cmp_def->parts;
+		struct key_part *part_end = part + cmp_def->part_count;
+		for (; part < part_end; part++) {
+			struct tuple_field *dst_field =
+				&dst_fields[part->fieldno];
+			struct tuple_field *src_field =
+				&src_fields[part->fieldno];
+			if (dst_field->offset_slot != TUPLE_OFFSET_SLOT_NIL) {
+				src_field = &format->fields[part->fieldno];
+			} else if (part->path != NULL) {
+				src_field =
+					tuple_field_tree_lookup(src_field,
+								part->path,
+								part->path_len);
+				assert(src_field != NULL);
+				dst_field =
+					tuple_field_tree_lookup(dst_field,
+								part->path,
+								part->path_len);
+				assert(dst_field != NULL);
+			} else {
+				continue;
+			}
+			if (src_field->offset_slot == TUPLE_OFFSET_SLOT_NIL)
+				continue;
+			dst_field->offset_slot = src_field->offset_slot;
+			min_offset_slot = MIN(src_field->offset_slot, min_offset_slot);
+		}
+		lsm->disk_format->field_map_size = -min_offset_slot * sizeof(uint32_t);
 	}
 	tuple_format_ref(lsm->disk_format);
 

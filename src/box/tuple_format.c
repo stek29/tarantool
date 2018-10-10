@@ -502,6 +502,7 @@ tuple_format_alloc(struct key_def * const *keys, uint16_t key_count,
 	}
 	for (uint32_t i = 0; i < field_count; i++)
 		tuple_field_create(&format->fields[i], NULL, 0);
+	format->epoch = 0;
 	format->max_path_tree_depth = 1;
 	format->allocation_size = total;
 	format->refs = 0;
@@ -545,7 +546,8 @@ struct tuple_format *
 tuple_format_new(struct tuple_format_vtab *vtab, struct key_def * const *keys,
 		 uint16_t key_count, uint16_t extra_size,
 		 const struct field_def *space_fields,
-		 uint32_t space_field_count, struct tuple_dictionary *dict)
+		 uint32_t space_field_count, struct tuple_dictionary *dict,
+		 uint64_t epoch)
 {
 	struct tuple_format *format =
 		tuple_format_alloc(keys, key_count, space_field_count, dict);
@@ -555,6 +557,7 @@ tuple_format_new(struct tuple_format_vtab *vtab, struct key_def * const *keys,
 	format->engine = NULL;
 	format->extra_size = extra_size;
 	format->is_temporary = false;
+	format->epoch = epoch;
 	if (tuple_format_register(format) < 0) {
 		tuple_format_destroy(format);
 		free(format);
@@ -1050,27 +1053,42 @@ tuple_field_by_part_raw(const struct tuple_format *format, const char *data,
 	if (likely(part->path == NULL))
 		return tuple_field_raw(format, data, field_map, part->fieldno);
 
-	struct tuple_field *root_field =
-		unlikely(part->fieldno < format->field_count) ?
-		(struct tuple_field *)&format->fields[part->fieldno] : NULL;
-	struct tuple_field *field =
-		unlikely(root_field == NULL) ? NULL:
-		tuple_field_tree_lookup(root_field, part->path, part->path_len);
-	if (unlikely(field == NULL)) {
-		/*
-		 * Legacy tuple having no field map for JSON
-		 * index require full path parse.
-		 */
-		const char *field_raw =
-			tuple_field_raw(format, data, field_map, part->fieldno);
-		if (unlikely(field_raw == NULL))
-			return NULL;
-		if (tuple_field_by_relative_path(&field_raw, part->path,
-						 part->path_len) != 0)
-			return NULL;
-		return field_raw;
+	int32_t offset_slot;
+	if (likely(part->offset_slot_epoch == format->epoch)) {
+		assert(format->epoch != 0);
+		offset_slot = part->offset_slot;
+	} else {
+		struct tuple_field *root_field =
+			unlikely(part->fieldno < format->field_count) ?
+			(struct tuple_field *)&format->fields[part->fieldno] :
+			NULL;
+		struct tuple_field *field =
+			unlikely(root_field == NULL) ? NULL:
+			tuple_field_tree_lookup(root_field, part->path,
+						part->path_len);
+		if (unlikely(field == NULL)) {
+			/*
+			* Legacy tuple having no field map for JSON
+			* index require full path parse.
+			*/
+			const char *field_raw =
+				tuple_field_raw(format, data, field_map,
+						part->fieldno);
+			if (unlikely(field_raw == NULL))
+				return NULL;
+			if (tuple_field_by_relative_path(&field_raw, part->path,
+							 part->path_len) != 0)
+				return NULL;
+			return field_raw;
+		}
+		offset_slot = field->offset_slot;
+		/* Cache offset_slot if required. */
+		if (part->offset_slot_epoch < format->epoch) {
+			assert(format->epoch != 0);
+			part->offset_slot = offset_slot;
+			part->offset_slot_epoch = format->epoch;
+		}
 	}
-	int32_t offset_slot = field->offset_slot;
 	assert(offset_slot < 0);
 	assert(-offset_slot * sizeof(uint32_t) <= format->field_map_size);
 	if (unlikely(field_map[offset_slot] == 0))

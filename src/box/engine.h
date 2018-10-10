@@ -72,7 +72,8 @@ struct engine_vtab {
 	void (*shutdown)(struct engine *);
 	/** Allocate a new space instance. */
 	struct space *(*create_space)(struct engine *engine,
-			struct space_def *def, struct rlist *key_list);
+			struct space_def *def, struct rlist *key_list,
+			uint64_t epoch);
 	/**
 	 * Write statements stored in checkpoint @vclock to @stream.
 	 */
@@ -237,9 +238,9 @@ engine_find(const char *name)
 
 static inline struct space *
 engine_create_space(struct engine *engine, struct space_def *def,
-		    struct rlist *key_list)
+		    struct rlist *key_list, uint64_t epoch)
 {
-	return engine->vtab->create_space(engine, def, key_list);
+	return engine->vtab->create_space(engine, def, key_list, epoch);
 }
 
 static inline int
@@ -390,9 +391,9 @@ engine_find_xc(const char *name)
 
 static inline struct space *
 engine_create_space_xc(struct engine *engine, struct space_def *def,
-		    struct rlist *key_list)
+		    struct rlist *key_list, uint64_t epoch)
 {
-	struct space *space = engine_create_space(engine, def, key_list);
+	struct space *space = engine_create_space(engine, def, key_list, epoch);
 	if (space == NULL)
 		diag_raise();
 	return space;

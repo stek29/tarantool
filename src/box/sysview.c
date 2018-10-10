@@ -504,8 +504,9 @@ sysview_engine_shutdown(struct engine *engine)
 
 static struct space *
 sysview_engine_create_space(struct engine *engine, struct space_def *def,
-			    struct rlist *key_list)
+			    struct rlist *key_list, uint64_t epoch)
 {
+	(void)epoch;
 	struct space *space = (struct space *)calloc(1, sizeof(*space));
 	if (space == NULL) {
 		diag_set(OutOfMemory, sizeof(*space),

@@ -135,7 +135,7 @@ blackhole_engine_shutdown(struct engine *engine)
 
 static struct space *
 blackhole_engine_create_space(struct engine *engine, struct space_def *def,
-			      struct rlist *key_list)
+			      struct rlist *key_list, uint64_t epoch)
 {
 	if (!rlist_empty(key_list)) {
 		diag_set(ClientError, ER_UNSUPPORTED, "Blackhole", "indexes");
@@ -152,7 +152,8 @@ blackhole_engine_create_space(struct engine *engine, struct space_def *def,
 	/* Allocate tuples on runtime arena, but check space format. */
 	struct tuple_format *format;
 	format = tuple_format_new(&tuple_format_runtime->vtab, NULL, 0, 0,
-				  def->fields, def->field_count, def->dict);
+				  def->fields, def->field_count, def->dict,
+				  epoch);
 	if (format == NULL) {
 		free(space);
 		return NULL;

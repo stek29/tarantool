@@ -221,7 +221,7 @@ sc_space_new(uint32_t id, const char *name,
 	struct rlist key_list;
 	rlist_create(&key_list);
 	rlist_add_entry(&key_list, index_def, link);
-	struct space *space = space_new_xc(def, &key_list);
+	struct space *space = space_new_xc(def, &key_list, 0);
 	(void) space_cache_replace(space);
 	if (replace_trigger)
 		trigger_add(&space->on_replace, replace_trigger);
@@ -380,7 +380,7 @@ schema_init()
 			space_def_delete(def);
 		});
 		RLIST_HEAD(key_list);
-		struct space *space = space_new_xc(def, &key_list);
+		struct space *space = space_new_xc(def, &key_list, 0);
 		space_cache_replace(space);
 		init_system_space(space);
 		trigger_run_xc(&on_alter_space, space);

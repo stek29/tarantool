@@ -358,10 +358,10 @@ memtx_engine_end_recovery(struct engine *engine)
 
 static struct space *
 memtx_engine_create_space(struct engine *engine, struct space_def *def,
-			  struct rlist *key_list)
+			  struct rlist *key_list, uint64_t epoch)
 {
 	struct memtx_engine *memtx = (struct memtx_engine *)engine;
-	return memtx_space_new(memtx, def, key_list);
+	return memtx_space_new(memtx, def, key_list, epoch);
 }
 
 static int

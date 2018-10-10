@@ -181,12 +181,12 @@ fail:
 }
 
 struct space *
-space_new(struct space_def *def, struct rlist *key_list)
+space_new(struct space_def *def, struct rlist *key_list, uint64_t epoch)
 {
 	struct engine *engine = engine_find(def->engine_name);
 	if (engine == NULL)
 		return NULL;
-	return engine_create_space(engine, def, key_list);
+	return engine_create_space(engine, def, key_list, epoch);
 }
 
 void
