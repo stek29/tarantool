@@ -1111,6 +1111,13 @@ sqlite3_column_name(sqlite3_stmt * pStmt, int N)
 			  COLNAME_NAME);
 }
 
+const char *
+sqlite3_column_datatype(sqlite3_stmt *pStmt, int N)
+{
+	return columnName(pStmt, N, (const void *(*)(Mem *))sqlite3_value_text,
+			  COLNAME_DECLTYPE);
+}
+
 /*
  * Constraint:  If you have ENABLE_COLUMN_METADATA then you must
  * not define OMIT_DECLTYPE.

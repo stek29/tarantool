@@ -1697,6 +1697,28 @@ generateColumnNames(Parse * pParse,	/* Parser context */
 		p = pEList->a[i].pExpr;
 		if (NEVER(p == 0))
 			continue;
+		switch (p->affinity) {
+		case AFFINITY_INTEGER:
+			sqlite3VdbeSetColName(v, i, COLNAME_DECLTYPE, "INTEGER",
+					      SQLITE_TRANSIENT);
+			break;
+		case AFFINITY_REAL:
+		case AFFINITY_NUMERIC:
+			sqlite3VdbeSetColName(v, i, COLNAME_DECLTYPE, "NUMERIC",
+					      SQLITE_TRANSIENT);
+			break;
+		case AFFINITY_TEXT:
+			sqlite3VdbeSetColName(v, i, COLNAME_DECLTYPE, "TEXT",
+					      SQLITE_TRANSIENT);
+			break;
+		case AFFINITY_BLOB:
+			sqlite3VdbeSetColName(v, i, COLNAME_DECLTYPE, "BLOB",
+					      SQLITE_TRANSIENT);
+			break;
+		default:
+			sqlite3VdbeSetColName(v, i, COLNAME_DECLTYPE, "UNKNOWN",
+					      SQLITE_TRANSIENT);
+		}
 		if (pEList->a[i].zName) {
 			char *zName = pEList->a[i].zName;
 			sqlite3VdbeSetColName(v, i, COLNAME_NAME, zName,
