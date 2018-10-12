@@ -36,15 +36,14 @@
 #include "tarantoolInt.h"
 
 struct Table *
-sql_lookup_table(struct Parse *parse, struct SrcList_item *tbl_name)
+sql_lookup_table(struct Parse *parse, struct SrcList_item *src_name)
 {
-	assert(tbl_name != NULL);
-	assert(tbl_name->pTab == NULL);
-	uint32_t space_id = box_space_id_by_name(tbl_name->zName,
-						 strlen(tbl_name->zName));
-	struct space *space = space_by_id(space_id);
-	if (space_id == BOX_ID_NIL || space == NULL) {
-		sqlite3ErrorMsg(parse, "no such table: %s", tbl_name->zName);
+	assert(src_name != NULL);
+	assert(src_name->pTab == NULL);
+	const char *name = src_name->zName;
+	struct space *space = space_by_name(name);
+	if (space == NULL) {
+		sqlite3ErrorMsg(parse, "no such table: %s", name);
 		return NULL;
 	}
 	assert(space != NULL);
@@ -61,8 +60,8 @@ sql_lookup_table(struct Parse *parse, struct SrcList_item *tbl_name)
 	table->def = space->def;
 	table->space = space;
 	table->nTabRef = 1;
-	tbl_name->pTab = table;
-	if (sqlite3IndexedByLookup(parse, tbl_name) != 0)
+	src_name->pTab = table;
+	if (sqlite3IndexedByLookup(parse, src_name) != 0)
 		table = NULL;
 	return table;
 }
@@ -98,14 +97,11 @@ sql_table_truncate(struct Parse *parse, struct SrcList *tab_list)
 		goto cleanup;
 
 	const char *tab_name = tab_list->a->zName;
-	uint32_t space_id = box_space_id_by_name(tab_name, strlen(tab_name));
-	if (space_id == BOX_ID_NIL) {
+	struct space *space = space_by_name(tab_name);
+	if (space == NULL) {
 		diag_set(ClientError, ER_NO_SUCH_SPACE, tab_name);
 		goto tarantool_error;
 	}
-	struct space *space = space_cache_find(space_id);
-	assert(space != NULL);
-
 	if (! rlist_empty(&space->parent_fkey)) {
 		const char *err_msg =
 			tt_sprintf("can not truncate space '%s' because other "

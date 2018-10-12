@@ -55,6 +55,7 @@
 
 /** All existing spaces. */
 static struct mh_i32ptr_t *spaces;
+static struct mh_strnptr_t *spaces_by_name;
 static struct mh_i32ptr_t *funcs;
 static struct mh_strnptr_t *funcs_by_name;
 static struct mh_i32ptr_t *sequences;
@@ -93,6 +94,17 @@ space_by_id(uint32_t id)
 	if (space == mh_end(spaces))
 		return NULL;
 	return (struct space *) mh_i32ptr_node(spaces, space)->val;
+}
+
+/** Return space by its name */
+struct space *
+space_by_name(const char *name)
+{
+	mh_int_t space = mh_strnptr_find_inp(spaces_by_name, name,
+					     strlen(name));
+	if (space == mh_end(spaces_by_name))
+		return NULL;
+	return (struct space *) mh_strnptr_node(spaces_by_name, space)->val;
 }
 
 /** Return current schema version */
@@ -160,14 +172,26 @@ space_foreach(int (*func)(struct space *sp, void *udata), void *udata)
 
 /** Delete a space from the space cache and Lua. */
 struct space *
-space_cache_delete(uint32_t id)
+space_cache_delete(struct space *space)
 {
-	mh_int_t k = mh_i32ptr_find(spaces, id, NULL);
+	mh_int_t k = mh_i32ptr_find(spaces, space_id(space), NULL);
 	assert(k != mh_end(spaces));
-	struct space *space = (struct space *)mh_i32ptr_node(spaces, k)->val;
+	struct space *space_by_id = (struct space *)mh_i32ptr_node(spaces,
+								   k)->val;
+	assert(space_by_id == space);
 	mh_i32ptr_del(spaces, k, NULL);
+
+	const char *name = space_name(space);
+	k = mh_strnptr_find_inp(spaces_by_name, name, strlen(name));
+	assert(k != mh_end(spaces_by_name));
+	struct space *space_by_n = (struct space *)mh_strnptr_node(spaces_by_name,
+								   k)->val;
+	assert(space_by_n == space_by_id);
+	(void)space_by_id;
+	mh_strnptr_del(spaces_by_name, k, NULL);
+
 	space_cache_version++;
-	return space;
+	return space_by_n;
 }
 
 /**
@@ -175,17 +199,83 @@ space_cache_delete(uint32_t id)
  * the old space instance, if any, or NULL if it's a new space.
  */
 struct space *
-space_cache_replace(struct space *space)
+space_cache_replace(struct space *new_space, struct space *old_space)
 {
-	const struct mh_i32ptr_node_t node = { space_id(space), space };
-	struct mh_i32ptr_node_t old, *p_old = &old;
-	mh_int_t k = mh_i32ptr_put(spaces, &node, &p_old, NULL);
-	if (k == mh_end(spaces)) {
-		panic_syserror("Out of memory for the data "
-			       "dictionary cache.");
+	assert(new_space != NULL || old_space != NULL);
+	struct space *old_space_by_n = NULL;
+	struct space *old_space_by_id = NULL;
+	if (new_space != NULL) {
+		/*
+		 * If replacing is performed and space name was
+		 * changed, then need to explicitly remove old
+		 * entry from spaces cache.
+		 * NB: Sincce space_id never changed - no need
+		 * to do so for space_id cache.
+		 */
+		if (old_space != NULL && strcmp(space_name(old_space),
+						new_space->def->name) != 0) {
+			const char *name = space_name(old_space);
+			mh_int_t k = mh_strnptr_find_inp(spaces_by_name, name,
+							 strlen(name));
+			assert(k != mh_end(spaces_by_name));
+			mh_strnptr_del(spaces_by_name, k, NULL);
+			old_space_by_n = (struct space *)mh_strnptr_node(spaces_by_name,
+									 k)->val;
+			space_cache_version++;
+		}
+		const struct mh_i32ptr_node_t node_p = { space_id(new_space),
+							 new_space };
+		struct mh_i32ptr_node_t old, *p_old = &old;
+		mh_int_t k = mh_i32ptr_put(spaces, &node_p, &p_old, NULL);
+		if (k == mh_end(spaces)) {
+			panic_syserror("Out of memory for the data "
+				       "dictionary cache.");
+		}
+		const char *name = space_name(new_space);
+		uint32_t name_len = strlen(name);
+		uint32_t hash = mh_strn_hash(name, name_len);
+		const struct mh_strnptr_node_t node_s = { name, name_len, hash,
+							  new_space };
+		struct mh_strnptr_node_t old_s, *p_old_s = &old_s;
+		k = mh_strnptr_put(spaces_by_name, &node_s, &p_old_s, NULL);
+		if (k == mh_end(spaces_by_name)) {
+			panic_syserror("Out of memory for the data "
+				       "dictionary cache.");
+		}
+		assert(old_space_by_n == NULL || p_old_s == NULL);
+		if(old_space_by_n == NULL && p_old != NULL) {
+			assert(p_old->val == p_old_s->val);
+			old_space_by_n = (struct space *)p_old->val;
+		}
+	} else {
+		mh_int_t k = mh_i32ptr_find(spaces, space_id(old_space), NULL);
+		assert(k != mh_end(spaces));
+		old_space_by_id = (struct space *)mh_i32ptr_node(spaces, k)->val;
+		assert(old_space_by_id == old_space);
+		mh_i32ptr_del(spaces, k, NULL);
+		const char *name = space_name(old_space);
+		k = mh_strnptr_find_inp(spaces_by_name, name, strlen(name));
+		assert(k != mh_end(spaces_by_name));
+		old_space_by_n = (struct space *)mh_strnptr_node(spaces_by_name,
+								 k)->val;
+		assert(old_space_by_n == old_space_by_id);
+		(void)old_space_by_id;
+		mh_strnptr_del(spaces_by_name, k, NULL);
 	}
 	space_cache_version++;
-	return p_old ? (struct space *) p_old->val : NULL;
+	return old_space_by_n;
+}
+
+/** Delete a space from the space name cache. */
+struct space *
+space_name_cache_delete(const char *name)
+{
+	mh_int_t k = mh_strnptr_find_inp(spaces_by_name, name, strlen(name));
+	assert(k != mh_end(spaces_by_name));
+	struct space *space = (struct space *)mh_strnptr_node(spaces_by_name,
+							      k)->val;
+	mh_strnptr_del(spaces_by_name, k, NULL);
+	return space;
 }
 
 /** A wrapper around space_new() for data dictionary spaces. */
@@ -220,7 +310,7 @@ sc_space_new(uint32_t id, const char *name,
 	rlist_create(&key_list);
 	rlist_add_entry(&key_list, index_def, link);
 	struct space *space = space_new_xc(def, &key_list);
-	(void) space_cache_replace(space);
+	(void) space_cache_replace(space, NULL);
 	if (replace_trigger)
 		trigger_add(&space->on_replace, replace_trigger);
 	if (stmt_begin_trigger)
@@ -303,6 +393,7 @@ schema_init()
 
 	/* Initialize the space cache. */
 	spaces = mh_i32ptr_new();
+	spaces_by_name = mh_strnptr_new();
 	funcs = mh_i32ptr_new();
 	funcs_by_name = mh_strnptr_new();
 	sequences = mh_i32ptr_new();
@@ -431,7 +522,7 @@ schema_init()
 		});
 		RLIST_HEAD(key_list);
 		struct space *space = space_new_xc(def, &key_list);
-		space_cache_replace(space);
+		space_cache_replace(space, NULL);
 		init_system_space(space);
 		trigger_run_xc(&on_alter_space, space);
 	}
@@ -447,10 +538,12 @@ schema_free(void)
 
 		struct space *space = (struct space *)
 				mh_i32ptr_node(spaces, i)->val;
-		space_cache_delete(space_id(space));
+		space_cache_delete(space);
+		space_name_cache_delete(space_name(space));
 		space_delete(space);
 	}
 	mh_i32ptr_delete(spaces);
+	mh_strnptr_delete(spaces_by_name);
 	while (mh_size(funcs) > 0) {
 		mh_int_t i = mh_first(funcs);
 
