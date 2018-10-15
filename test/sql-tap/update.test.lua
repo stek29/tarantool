@@ -889,7 +889,7 @@ test:do_execsql_test("update-10.1", [[
   DROP TABLE test1;
   CREATE TABLE t1(
      a integer primary key,
-     b  INT UNIQUE, 
+     b  INT UNIQUE,
      c INT , d INT ,
      e INT , f INT ,
      UNIQUE(c,d)

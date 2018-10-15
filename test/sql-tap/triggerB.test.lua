@@ -134,7 +134,7 @@ test:do_test(
                c30 TEXT , c31 TEXT , c32 TEXT , c33 TEXT , c34 TEXT , c35 TEXT , c36 TEXT , c37 TEXT , c38 TEXT , c39 TEXT ,
                c40 TEXT , c41 TEXT , c42 TEXT , c43 TEXT , c44 TEXT , c45 TEXT , c46 TEXT , c47 TEXT , c48 TEXT , c49 TEXT ,
                c50 TEXT , c51 TEXT , c52 TEXT , c53 TEXT , c54 TEXT , c55 TEXT , c56 TEXT , c57 TEXT , c58 TEXT , c59 TEXT ,
-               c60 TEXT , c61 TEXT , c62 TEXT , c63 TEXT , c64 TEXT , c65 TEXT 
+               c60 TEXT , c61 TEXT , c62 TEXT , c63 TEXT , c64 TEXT , c65 TEXT
             );
             CREATE TABLE t3_changes(colnum INT PRIMARY KEY, oldval TEXT , newval TEXT );
             INSERT INTO t3 VALUES(

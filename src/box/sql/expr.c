@@ -76,12 +76,14 @@ sqlite3ExprAffinity(Expr * pExpr)
 	if (pExpr->flags & EP_Generic)
 		return 0;
 	uint8_t op = pExpr->op;
+	struct ExprList *el;
 	if (op == TK_REGISTER)
 		op = pExpr->op2;
 	switch (op) {
 	case TK_SELECT:
 		assert(pExpr->flags & EP_xIsSelect);
-		return sqlite3ExprAffinity(pExpr->x.pSelect->pEList->a[0].pExpr);
+		el = pExpr->x.pSelect->pEList;
+		return sqlite3ExprAffinity(el->a[0].pExpr);
 	case TK_CAST:
 		assert(!ExprHasProperty(pExpr, EP_IntValue));
 		return pExpr->affinity;
@@ -92,8 +94,8 @@ sqlite3ExprAffinity(Expr * pExpr)
 						  pExpr->iColumn);
 	case TK_SELECT_COLUMN:
 		assert(pExpr->pLeft->flags & EP_xIsSelect);
-		return sqlite3ExprAffinity(pExpr->pLeft->x.pSelect->pEList->
-			a[pExpr->iColumn].pExpr);
+		el = pExpr->pLeft->x.pSelect->pEList;
+		return sqlite3ExprAffinity(el->a[pExpr->iColumn].pExpr);
 	case TK_PLUS:
 	case TK_MINUS:
 	case TK_STAR:
@@ -2341,7 +2343,7 @@ sqlite3FindInIndex(Parse * pParse,	/* Parsing context */
 	int iTab = pParse->nTab++;	/* Cursor of the RHS table */
 	int mustBeUnique;	/* True if RHS must be unique */
 	Vdbe *v = sqlite3GetVdbe(pParse);	/* Virtual machine being coded */
-	if (pUseIdx)
+	if (pUseIdx != NULL)
 		*pUseIdx = NULL;
 
 	assert(pX->op == TK_IN);
@@ -2488,7 +2490,7 @@ sqlite3FindInIndex(Parse * pParse,	/* Parsing context */
 				       || colUsed != (MASKBIT(nExpr) - 1));
 				if (colUsed == (MASKBIT(nExpr) - 1)) {
 					/* If we reach this point, that means the index pIdx is usable */
-					if (pUseIdx)
+					if (pUseIdx != NULL)
 						*pUseIdx = idx->def;
 					int iAddr = sqlite3VdbeAddOp0(v, OP_Once);
 					VdbeCoverage(v);

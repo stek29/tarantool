@@ -56,7 +56,7 @@ test:do_execsql_test(
     "index3-2.1",
     [[
         DROP TABLE t1;
-        CREATE TABLE t1(a INT , b TEXT , c INT , d INT , e INT , 
+        CREATE TABLE t1(a INT , b TEXT , c INT , d INT , e INT ,
                         PRIMARY KEY(a), UNIQUE(b COLLATE "unicode_ci" DESC));
         CREATE INDEX t1c ON t1(c);
         CREATE INDEX t1d ON t1(d COLLATE binary ASC);

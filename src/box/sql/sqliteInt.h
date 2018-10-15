@@ -1622,6 +1622,11 @@ struct sqlite3 {
 #define SQLITE_MAGIC_ERROR    0xb5357930	/* An SQLITE_MISUSE error occurred */
 #define SQLITE_MAGIC_ZOMBIE   0x64cffc7f	/* Close with last statement close */
 
+/**
+ * SQL type definition. Now it is an alias to affinity, but in
+ * future it will have some attributes like number of chars in
+ * VARCHAR(<number of chars>).
+ */
 struct type_def {
 	enum affinity_type type;
 };

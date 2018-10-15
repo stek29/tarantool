@@ -239,7 +239,7 @@ test:do_execsql_test(
         SELECT x FROM t2 WHERE '1.0' IN (x);
     ]], {
         -- <3.8>
-        
+
         -- </3.8>
     })
 
@@ -309,7 +309,7 @@ test:do_execsql_test(
         SELECT x FROM t3 WHERE '1' IN (x);
     ]], {
         -- <4.7>
-        
+
         -- </4.7>
     })
 

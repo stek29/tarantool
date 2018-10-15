@@ -519,7 +519,7 @@ test:drop_all_tables()
 test:do_execsql_test(
     "5.1.0",
     [[
-        CREATE TABLE t1(idt1  INT PRIMARY KEY, a INT, b INT, ex TEXT) 
+        CREATE TABLE t1(idt1  INT PRIMARY KEY, a INT, b INT, ex TEXT)
     ]])
 
 test:do_eqp_test("5.1.1", "SELECT a, b FROM t1 WHERE a=1", {

@@ -735,7 +735,7 @@ test:do_execsql_test(
         SELECT c FROM t6 ORDER BY a,b;
     ]], {
         -- <index-14.1>
-       3, 2, 1, 5, 4 
+        3, 2, 1, 5, 4
         -- </index-14.1>
     })
 
@@ -835,7 +835,7 @@ test:do_execsql_test(
         SELECT c FROM t6 WHERE a<'';
     ]], {
         -- <index-14.11>
-        
+
         -- </index-14.11>
     })
 
@@ -847,7 +847,7 @@ test:do_execsql_test(
         SELECT * FROM t1;
     ]], {
         -- <index-15.1>
-        
+
         -- </index-15.1>
     })
 
@@ -1016,5 +1016,4 @@ if (0 > 0)
 
 end
 
-::exe::
 test:finish_test()
