@@ -746,9 +746,10 @@ lbox_merger_new(struct lua_State *L)
 		/* Check coll_id. */
 		struct coll_id *coll_id = coll_by_id(parts[count].coll_id);
 		if (parts[count].coll_id != COLL_NONE && coll_id == NULL) {
+			uint32_t collation_id = parts[count].coll_id;
 			free(parts);
 			return luaL_error(L, "Unknown collation_id: %d",
-					  parts[count].coll_id);
+					  collation_id);
 		}
 
 		++count;
