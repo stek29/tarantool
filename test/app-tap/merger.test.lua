@@ -11,7 +11,7 @@ local utf8 = require('utf8')
 local ffi = require('ffi')
 
 local IPROTO_DATA = 48
-local BATCH_SIZE = 10
+local BATCH_SIZE = 3
 
 local schemas = {
     {
