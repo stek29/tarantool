@@ -224,8 +224,8 @@ end
 
 local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     local opts = opts or {}
-    local use_function_input = opts.use_function_input or false
-    local use_batch_io = opts.use_batch_io or false
+    local input_type = opts.input_type or 'buffer'
+    local use_chain_io = opts.use_chain_io or false
 
     local tuples = {}
     local exp_result = {}
@@ -257,7 +257,7 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     -- Wrap tuples from each source into a table to imitate
     -- 'batch request': a request that return multiple select
     -- results. Here we have BATCH_SIZE select results.
-    if use_batch_io then
+    if use_chain_io then
         local new_tuples = {}
         for i = 1, sources_cnt do
             new_tuples[i] = {}
@@ -277,7 +277,7 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     end
 
     -- Replace buffers[i] with a function that gives one tuple per call.
-    if use_function_input then
+    if input_type == 'function' then
         local buffers = table.copy(inputs)
         for i = 1, sources_cnt do
             local idx = 1
@@ -304,14 +304,16 @@ end
 local function merger_opts_str(opts)
     local params = {}
 
-    if opts.use_function_input then
-        table.insert(params, 'use_function_input')
-    elseif opts.use_batch_io then
-        table.insert(params, 'use_batch_io')
+    if opts.input_type then
+        table.insert(params, 'input_type: ' .. opts.input_type)
     end
 
-    if opts.use_buffer_output then
-        table.insert(params, 'use_buffer_output')
+    if opts.use_chain_io then
+        table.insert(params, 'use_chain_io')
+    end
+
+    if opts.output_type then
+        table.insert(params, 'output_type: ' .. opts.output_type)
     end
 
     if next(params) == nil then
@@ -387,7 +389,7 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
     fiber.yield()
 
     local opts = opts or {}
-    local use_batch_io = opts.use_batch_io or false
+    local use_chain_io = opts.use_chain_io or false
 
     local inputs, exp_result =
         prepare_data(schema, tuples_cnt, sources_cnt, opts)
@@ -405,12 +407,12 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
     }
 
     local obuf
-    if opts.use_buffer_output then
+    if opts.output_type == 'buffer' then
         obuf = buffer.ibuf()
         context.merger_start_opts[2].buffer = obuf
     end
 
-    if use_batch_io then
+    if use_chain_io then
         test:test('run chained mergers for batch select results', function(test)
             test:plan(BATCH_SIZE)
             context.test = test
@@ -420,7 +422,7 @@ local function run_merger(test, schema, tuples_cnt, sources_cnt, opts)
                 context.merger_start_opts[2].input_chain_first =
                     input_chain_first
                 -- Set output_chain_{first,len}. */
-                if opts.use_buffer_output then
+                if opts.output_type == 'buffer' then
                     context.merger_start_opts[2].output_chain_first =
                         input_chain_first
                     -- We should set output_chain_len to
@@ -580,18 +582,18 @@ test:is_deeply({ok, err}, {false, exp_err}, 'function input is forbidded ' ..
     'with chaining')
 
 -- Remaining cases.
-for _, use_function_input in ipairs({false, true}) do
-    for _, use_batch_io in ipairs({false, true}) do
-        for _, use_buffer_output in ipairs({false, true}) do
+for _, use_chain_io in ipairs({false, true}) do
+    for _, input_type in ipairs({'buffer', 'function'}) do
+        for _, output_type in ipairs({'buffer', 'function'}) do
             for _, schema in ipairs(schemas) do
-                -- These options are mutually exclusive.
-                if use_function_input and use_batch_io then
+                -- One cannot use function input with chain buffer output.
+                if input_type == 'function' and use_chain_io then
                     goto continue
                 end
                 local opts = {
-                    use_function_input = use_function_input,
-                    use_batch_io = use_batch_io,
-                    use_buffer_output = use_buffer_output,
+                    input_type = input_type,
+                    use_chain_io = use_chain_io,
+                    output_type = output_type,
                 }
                 run_case(test, schema, opts)
                 ::continue::
