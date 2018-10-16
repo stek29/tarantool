@@ -502,6 +502,31 @@ lbox_merger_start(struct lua_State *L)
 				"used");
 	}
 
+	/* Verify that all sources have right types. */
+	int i = 1;
+	while (true) {
+		lua_pushinteger(L, i);
+		lua_gettable(L, 2);
+		if (lua_isnil(L, -1))
+			break;
+		if (lua_isfunction(L, -1))
+			merger->has_function_source = true;
+		else if (check_ibuf(L, -1) == NULL)
+			return luaL_error(L, "Unknown input type at index %d",
+					  i);
+		++i;
+	}
+	lua_pop(L, i);
+
+	/*
+	 * Verify that we have no function input in case of
+	 * chained mergers, because it is unclear how to
+	 * distinguish one array of tuples from an another.
+	 */
+	if (merger->has_function_source && merger->output_chain)
+		return luaL_error(L, "Cannot use source of a function type "
+				  "with chained output");
+
 	/* (Re)allocate sources array. */
 	free_sources(L, merger);
 	merger->capacity = 8;
@@ -521,15 +546,12 @@ lbox_merger_start(struct lua_State *L)
 		if (lua_isfunction(L, -1)) {
 			/* Function input. */
 			source_type = SOURCE_TYPE_FUNCTION;
-			merger->has_function_source = true;
-		} else if ((buf = check_ibuf(L, -1)) != NULL) {
+		} else {
 			/* Buffer input. */
 			source_type = SOURCE_TYPE_BUFFER;
+			buf = check_ibuf(L, -1);
 			if (ibuf_used(buf) == 0)
 				continue;
-		} else {
-			return luaL_error(L, "Unknown input type at index %d",
-					  merger->count + 1);
 		}
 		/* Shrink sources array if needed. */
 		if (merger->count == merger->capacity) {
@@ -580,6 +602,7 @@ lbox_merger_start(struct lua_State *L)
 				merger->sources[merger->count]);
 		++merger->count;
 	}
+	lua_pop(L, merger->count + 1);
 
 	if (merger->obuf != NULL)
 		encode_result_buffer(L, merger);

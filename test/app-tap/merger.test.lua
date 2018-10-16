@@ -465,7 +465,7 @@ local function run_case(test, schema, opts)
 end
 
 local test = tap.test('merger')
-test:plan(12 + #schemas * 6)
+test:plan(13 + #schemas * 6)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -571,6 +571,13 @@ local ok, err = pcall(merger_inst.start, merger_inst, {},
 local exp_err = '"output_chain_len" is mandatory when "buffer" and ' ..
     '"output_chain_first" are used'
 test:is_deeply({ok, err}, {false, exp_err}, 'start() missed output_chain_len')
+
+-- Case: function input + chaining
+local ok, err = pcall(merger_inst.start, merger_inst, {function() end},
+    {buffer = buffer.ibuf(), output_chain_first = true, output_chain_len = 1})
+local exp_err = 'Cannot use source of a function type with chained output'
+test:is_deeply({ok, err}, {false, exp_err}, 'function input is forbidded ' ..
+    'with chaining')
 
 -- Remaining cases.
 for _, use_function_input in ipairs({false, true}) do
