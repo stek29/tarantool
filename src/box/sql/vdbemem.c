@@ -283,14 +283,10 @@ sqlite3VdbeMemStringify(Mem * pMem, u8 bForce)
 	int fg = pMem->flags;
 	const int nByte = 32;
 
-	if (fg & MEM_Null)
-		return SQLITE_OK;
-
-	if (fg & (MEM_Str | MEM_Blob))
+	if ((fg & (MEM_Null | MEM_Str | MEM_Blob)) != 0)
 		return SQLITE_OK;
 
 	assert(!(fg & MEM_Zero));
-	assert(!(fg & (MEM_Str | MEM_Blob)));
 	assert(fg & (MEM_Int | MEM_Real));
 	assert(EIGHT_BYTE_ALIGNMENT(pMem));
 
@@ -532,7 +528,7 @@ sqlite3VdbeMemIntegerify(Mem * pMem, bool is_forced)
 	if (sqlite3VdbeIntValue(pMem, &i) == 0) {
 		pMem->u.i = i;
 		MemSetTypeFlag(pMem, MEM_Int);
-		return SQLITE_OK;
+		return 0;
 	} else if ((pMem->flags & MEM_Real) != 0 && is_forced) {
 		pMem->u.i = (int) pMem->u.r;
 		MemSetTypeFlag(pMem, MEM_Int);
@@ -545,7 +541,7 @@ sqlite3VdbeMemIntegerify(Mem * pMem, bool is_forced)
 	}
 	pMem->u.i = (int64_t) d;
 	MemSetTypeFlag(pMem, MEM_Int);
-	return SQLITE_OK;
+	return 0;
 }
 
 /*
@@ -606,9 +602,7 @@ sqlite3VdbeMemCast(Mem * pMem, u8 aff)
 {
 	if (pMem->flags & MEM_Null)
 		return SQLITE_OK;
-	if (pMem->flags & MEM_Blob && aff == AFFINITY_INTEGER)
-		return sql_atoi64(pMem->z, (int64_t *) &pMem->u.i, pMem->n);
-	if (pMem->flags & MEM_Blob &&
+	if ((pMem->flags & MEM_Blob) != 0 &&
 	    (aff == AFFINITY_REAL || aff == AFFINITY_NUMERIC)) {
 		if (sql_atoi64(pMem->z, (int64_t *) &pMem->u.i, pMem->n) == 0) {
 			MemSetTypeFlag(pMem, MEM_Real);
@@ -631,6 +625,10 @@ sqlite3VdbeMemCast(Mem * pMem, u8 aff)
 	case AFFINITY_NUMERIC:
 		return sqlite3VdbeMemNumerify(pMem);
 	case AFFINITY_INTEGER:
+		if ((pMem->flags & MEM_Blob) != 0) {
+			return sql_atoi64(pMem->z, (int64_t *) &pMem->u.i,
+					  pMem->n);
+		}
 		return sqlite3VdbeMemIntegerify(pMem, true);
 	case AFFINITY_REAL:
 		return sqlite3VdbeMemRealify(pMem);
