@@ -39,6 +39,7 @@
 #include "lua/utils.h"
 #include "small/ibuf.h"
 #include "msgpuck.h"
+#include "msgpack.h"
 
 #define HEAP_FORWARD_DECLARATION
 #include "salad/heap.h"
@@ -106,6 +107,7 @@
 
 enum source_type_t {
 	SOURCE_TYPE_BUFFER,
+	SOURCE_TYPE_TABLE,
 	SOURCE_TYPE_FUNCTION,
 };
 
@@ -113,10 +115,24 @@ struct source {
 	struct heap_node hnode;
 	enum source_type_t source_type;
 	union {
-		struct ibuf *buf;
-		int next_ref;
+		/* Fields specific for a buffer source. */
+		struct {
+			struct ibuf *buf;
+			/* A merger stops before end of a buffer
+			 * when it is not the last merger in the
+			 * chain. */
+			size_t remaining_tuples_cnt;
+		} buf;
+		/* Fields specific for a table source. */
+		struct {
+			int ref;
+			int next_idx;
+		} tbl;
+		/* Fields specific for a function source. */
+		struct {
+			int ref;
+		} fnc;
 	} input;
-	size_t remain_len;
 	struct tuple *tuple;
 };
 
@@ -131,19 +147,22 @@ struct merger {
 	struct key_def *key_def;
 	box_tuple_format_t *format;
 	int order;
-	/* Parameters to decode msgpack header. */
+	/* Parameters to decode a msgpack header. */
 	bool input_chain;
 	bool input_chain_first;
 	/* User-provided output buffer. */
 	struct ibuf *obuf;
-	/* Parameters to encode msgpack header. */
+	/* Parameters to encode a msgpack header. */
 	bool output_chain;
 	bool output_chain_first;
 	uint32_t output_chain_len;
-	/* Merger sums input buffers length and then adds
-	 * function sources length during output buffer encoding
-	 * (because their sizes are unknown until the end). */
-	uint32_t buffer_result_len;
+	/*
+	 * Merger sums input buffers and tables lengths and then,
+	 * during an output buffer encoding, adds function sources
+	 * lengths (because their sizes are unknown until the
+	 * end).
+	 */
+	uint32_t precalculated_result_len;
 	bool has_function_source;
 };
 
@@ -172,36 +191,109 @@ source_less(const heap_t *heap, const struct heap_node *a,
 #define HEAP_LESS source_less
 #include "salad/heap.h"
 
-static inline void
+/* Does not return (throws a Lua error) in case of an error. */
+static inline struct tuple *
+luaT_gettuple_with_format(struct lua_State *L, int idx,
+			  box_tuple_format_t *format)
+{
+	struct tuple *tuple;
+	if (lua_istable(L, idx)) {
+		/* Based on lbox_tuple_new() code. */
+		struct ibuf *buf = tarantool_lua_ibuf;
+		ibuf_reset(buf);
+		struct mpstream stream;
+		mpstream_init(&stream, buf, ibuf_reserve_cb, ibuf_alloc_cb,
+		      luamp_error, L);
+		luamp_encode_tuple(L, luaL_msgpack_default, &stream, idx);
+		mpstream_flush(&stream);
+		tuple = box_tuple_new(format, buf->buf,
+				      buf->buf + ibuf_used(buf));
+		if (tuple == NULL) {
+			luaT_error(L);
+			unreachable();
+			return NULL;
+		}
+		ibuf_reinit(tarantool_lua_ibuf);
+		return tuple;
+	}
+	tuple = luaT_istuple(L, idx);
+	if (tuple == NULL) {
+		luaL_error(L, "A tuple or a table expected, got %s",
+			   lua_typename(L, lua_type(L, -1)));
+		unreachable();
+		return NULL;
+	}
+	/*
+	 * Create the new tuple with the format necessary for fast
+	 * comparisons.
+	 */
+	const char *tuple_beg = tuple_data(tuple);
+	const char *tuple_end = tuple_beg + tuple->bsize;
+	tuple = box_tuple_new(format, tuple_beg, tuple_end);
+	if (tuple == NULL) {
+		luaT_error(L);
+		unreachable();
+		return NULL;
+	}
+	return tuple;
+}
+
+/*
+ * Does not return (throws a Lua error) in case of an error.
+ *
+ * This function should leave the stack even, lbox_merger_next()
+ * lean on that.
+ */
+static void
 source_fetch(struct lua_State *L, struct source *source,
 	     box_tuple_format_t *format)
 {
 	source->tuple = NULL;
-	if (source->source_type == SOURCE_TYPE_FUNCTION) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX, source->input.next_ref);
+
+	switch (source->source_type) {
+	case SOURCE_TYPE_BUFFER:
+		if (source->input.buf.remaining_tuples_cnt == 0)
+			return;
+		--source->input.buf.remaining_tuples_cnt;
+		if (ibuf_used(source->input.buf.buf) == 0) {
+			luaL_error(L, "Unexpected msgpack buffer end");
+			unreachable();
+			return;
+		}
+		const char *tuple_beg = source->input.buf.buf->rpos;
+		const char *tuple_end = tuple_beg;
+		mp_next(&tuple_end);
+		assert(tuple_end <= source->input.buf.buf->wpos);
+		source->input.buf.buf->rpos = (char *) tuple_end;
+		source->tuple = box_tuple_new(format, tuple_beg, tuple_end);
+		if (source->tuple == NULL) {
+			luaT_error(L);
+			unreachable();
+			return;
+		}
+		break;
+	case SOURCE_TYPE_TABLE:
+		lua_rawgeti(L, LUA_REGISTRYINDEX, source->input.tbl.ref);
+		lua_pushinteger(L, source->input.tbl.next_idx);
+		lua_gettable(L, -2);
+		if (lua_isnil(L, -1)) {
+			lua_pop(L, 2);
+			return;
+		}
+		source->tuple = luaT_gettuple_with_format(L, -1, format);
+		++source->input.tbl.next_idx;
+		lua_pop(L, 2);
+		break;
+	case SOURCE_TYPE_FUNCTION:
+		lua_rawgeti(L, LUA_REGISTRYINDEX, source->input.fnc.ref);
 		lua_call(L, 0, 1);
 		if (lua_isnil(L, -1)) {
 			lua_pop(L, 1);
 			return;
 		}
-		source->tuple = luaT_istuple(L, -1);
-		if (source->tuple == NULL)
-			luaL_error(L, "source_fetch: tuple expected, got %s",
-				   lua_typename(L, lua_type(L, -1)));
+		source->tuple = luaT_gettuple_with_format(L, -1, format);
 		lua_pop(L, 1);
-	} else {
-		if (source->remain_len == 0)
-			return;
-		--source->remain_len;
-		if (ibuf_used(source->input.buf) == 0) {
-			luaL_error(L, "Unexpected msgpack buffer end");
-		}
-		const char *tuple_beg = source->input.buf->rpos;
-		const char *tuple_end = tuple_beg;
-		mp_next(&tuple_end);
-		assert(tuple_end <= source->input.buf->wpos);
-		source->input.buf->rpos = (char *) tuple_end;
-		source->tuple = box_tuple_new(format, tuple_beg, tuple_end);
+		break;
 	}
 	box_tuple_ref(source->tuple);
 }
@@ -210,9 +302,12 @@ static void
 free_sources(struct lua_State *L, struct merger *merger)
 {
 	for (uint32_t i = 0; i < merger->count; ++i) {
+		if (merger->sources[i]->source_type == SOURCE_TYPE_TABLE)
+			luaL_unref(L, LUA_REGISTRYINDEX,
+				   merger->sources[i]->input.tbl.ref);
 		if (merger->sources[i]->source_type == SOURCE_TYPE_FUNCTION)
 			luaL_unref(L, LUA_REGISTRYINDEX,
-				   merger->sources[i]->input.next_ref);
+				   merger->sources[i]->input.fnc.ref);
 		if (merger->sources[i]->tuple != NULL)
 			box_tuple_unref(merger->sources[i]->tuple);
 		free(merger->sources[i]);
@@ -352,12 +447,14 @@ merger_next(struct lua_State *L, struct merger *merger, uint32_t *result_len_p)
 static void
 encode_result_buffer(struct lua_State *L, struct merger *merger)
 {
-	uint32_t result_len = merger->buffer_result_len;
+	uint32_t result_len = merger->precalculated_result_len;
 	uint32_t result_len_offset = 4;
 
-	/* Reserve maximum size for the array around chained
+	/*
+	 * Reserve maximum size for the array around chained
 	 * output to set it later in case of a function source
-	 * is used. */
+	 * is used.
+	 */
 	encode_header(merger, merger->has_function_source ? UINT32_MAX :
 			      result_len);
 
@@ -377,7 +474,8 @@ encode_result_buffer(struct lua_State *L, struct merger *merger)
 			     result_len);
 }
 
-/* Chained mergers
+/*
+ * Chained mergers
  * ===============
  *
  * Chained mergers are needed to process a batch select request,
@@ -397,6 +495,35 @@ encode_result_buffer(struct lua_State *L, struct merger *merger)
  * possible (but not mandatory) to use different mergers for each
  * result, just reuse the same buffers for consequent `start`
  * calls.
+ *
+ * A merger should not be used in a new merge until the previous
+ * one does not end (either with all tuples processed or just
+ * enough tuple processed -- the important things here is not to
+ * call next() until the new start()). A user is responsible to
+ * avoid fiber yields until the merge ends or perform appropriate
+ * locking.
+ *
+ * XXX: It seems we should split the merger structure to the
+ * merger itself and a merge process structure (returned from
+ * start()) in order to withdraw this responsibility from a user.
+ *
+ * When there are table sources within provided sources and
+ * non-nil (true or false) input_chain_first parameter is
+ * provided, the function stores and updates a current chain
+ * number in 0th item of the source table. It **is** the change of
+ * a user-provided parameter, but this is the only way to provide
+ * the same API for chained mergers on top of table sources as is
+ * provided for buffer sources (w/o extra parameters that are
+ * needed only when at least one table source is used).
+ *
+ * We could store a current chain number in a merger itself, but
+ * such approach obligates a user to manually call some clean up
+ * function to flush the chain number to use the merger again in
+ * an another merge.
+ *
+ * We could obligate a user to provide a chain number, but we
+ * would just ignore it w/o even correctness check for buffer
+ * sources, that does not look appropriate.
  */
 static int
 lbox_merger_start(struct lua_State *L)
@@ -422,7 +549,7 @@ lbox_merger_start(struct lua_State *L)
 	merger->output_chain_len = 0;
 
 	/* Flush info for output buffer encoding. */
-	merger->buffer_result_len = 0;
+	merger->precalculated_result_len = 0;
 	merger->has_function_source = false;
 
 	/* Parse opts. */
@@ -511,7 +638,7 @@ lbox_merger_start(struct lua_State *L)
 			break;
 		if (lua_isfunction(L, -1))
 			merger->has_function_source = true;
-		else if (check_ibuf(L, -1) == NULL)
+		else if (check_ibuf(L, -1) == NULL && !lua_istable(L, -1))
 			return luaL_error(L, "Unknown input type at index %d",
 					  i);
 		++i;
@@ -543,16 +670,36 @@ lbox_merger_start(struct lua_State *L)
 			break;
 		enum source_type_t source_type;
 		struct ibuf *buf = NULL;
-		if (lua_isfunction(L, -1)) {
-			/* Function input. */
-			source_type = SOURCE_TYPE_FUNCTION;
-		} else {
+		if (lua_type(L, -1) == LUA_TCDATA) {
 			/* Buffer input. */
 			source_type = SOURCE_TYPE_BUFFER;
 			buf = check_ibuf(L, -1);
-			if (ibuf_used(buf) == 0)
+			if (ibuf_used(buf) == 0) {
+				/*
+				 * In case of chained merger at
+				 * least an empty array should
+				 * be encoded in the buffer.
+				 */
+				if (merger->input_chain)
+					return luaL_error(L, "Invalid merge "
+							  "source");
+				/*
+				 * Do not allocate a new source
+				 * when there is no more data in
+				 * the buffer.
+				 */
+				lua_pop(L, 1);
 				continue;
+			}
+		} else if (lua_istable(L, -1) ) {
+			/* Table input. */
+			source_type = SOURCE_TYPE_TABLE;
+		} else {
+			assert(lua_isfunction(L, -1));
+			/* Function input. */
+			source_type = SOURCE_TYPE_FUNCTION;
 		}
+
 		/* Shrink sources array if needed. */
 		if (merger->count == merger->capacity) {
 			merger->capacity *= 2;
@@ -568,38 +715,76 @@ lbox_merger_start(struct lua_State *L)
 			}
 			merger->sources = new_sources;
 		}
+
 		/* Allocate the new source. */
 		merger->sources[merger->count] =
 			(struct source *) malloc(sizeof(struct source));
-		if (merger->sources[merger->count] == NULL) {
+		struct source *current_source = merger->sources[merger->count];
+		if (current_source == NULL) {
 			free_sources(L, merger);
 			throw_out_of_memory_error(L, sizeof(struct source),
 						  "source");
 		}
-		merger->sources[merger->count]->source_type = source_type;
+		current_source->source_type = source_type;
 
-		if (source_type == SOURCE_TYPE_FUNCTION) {
-			/* Save a function to get next tuple. */
-			lua_pushvalue(L, -1); /* duplicate the function */
-			int next = luaL_ref(L, LUA_REGISTRYINDEX);
-			merger->sources[merger->count]->input.next_ref = next;
-		} else {
-			size_t *len_p =
-				&merger->sources[merger->count]->remain_len;
-			if (!decode_header(merger, buf, len_p)) {
+		/* Initialize the new source. */
+		int input_chain_idx = 0;
+		switch (source_type) {
+		case SOURCE_TYPE_BUFFER:
+			if (!decode_header(merger, buf,
+			    &current_source->input.buf.remaining_tuples_cnt)) {
 				free_sources(L, merger);
 				return luaL_error(L, "Invalid merge source");
 			}
-			merger->sources[merger->count]->input.buf = buf;
-			merger->buffer_result_len += *len_p;
+			current_source->input.buf.buf = buf;
+			merger->precalculated_result_len +=
+				current_source->input.buf.remaining_tuples_cnt;
+			break;
+		case SOURCE_TYPE_TABLE:
+			/*
+			 * Store current input chain index in the
+			 * 0th item of a table source.
+			 */
+			if (merger->input_chain && merger->input_chain_first) {
+				/* current_source_table[0] = 1 */
+				input_chain_idx = 1;
+				lua_pushinteger(L, 0);
+				lua_pushinteger(L, input_chain_idx);
+				lua_settable(L, -3);
+			} else if (merger->input_chain) {
+				/* ++current_source_table[0] */
+				lua_pushinteger(L, 0);
+				lua_gettable(L, -2);
+				input_chain_idx = lua_tointeger(L, -1) + 1;
+				lua_pop(L, 1);
+				lua_pushinteger(L, 0);
+				lua_pushinteger(L, input_chain_idx);
+				lua_settable(L, -3);
+			}
+			if (merger->input_chain) {
+				lua_pushinteger(L, input_chain_idx);
+				lua_gettable(L, -2);
+				lua_remove(L, -2);
+			}
+			/* Save a table ref and a next index. */
+			lua_pushvalue(L, -1); /* Popped by luaL_ref(). */
+			int tbl_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+			current_source->input.tbl.ref = tbl_ref;
+			current_source->input.tbl.next_idx = 1;
+			merger->precalculated_result_len += lua_objlen(L, -1);
+			break;
+		case SOURCE_TYPE_FUNCTION:
+			/* Save a function to get next tuple. */
+			lua_pushvalue(L, -1); /* Popped by luaL_ref(). */
+			int fnc_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+			current_source->input.fnc.ref = fnc_ref;
+			break;
 		}
-		merger->sources[merger->count]->tuple = NULL;
-		source_fetch(L, merger->sources[merger->count], merger->format);
-		if (merger->sources[merger->count]->tuple != NULL)
-			MERGER_HEAP_INSERT(
-				&merger->heap,
-				&merger->sources[merger->count]->hnode,
-				merger->sources[merger->count]);
+		source_fetch(L, current_source, merger->format);
+		if (current_source->tuple != NULL)
+			MERGER_HEAP_INSERT(&merger->heap,
+					   &current_source->hnode,
+					   current_source);
 		++merger->count;
 	}
 	lua_pop(L, merger->count + 1);
@@ -695,8 +880,10 @@ lbox_merger_new(struct lua_State *L)
 			free(parts);
 			return luaL_error(L, "fieldno must not be nil");
 		}
-		/* Transform one-based Lua fieldno to zero-based
-		 * C fieldno. */
+		/*
+		 * Transform one-based Lua fieldno to zero-based
+		 * fieldno to use in key_def_new().
+		 */
 		parts[count].fieldno = lua_tointeger(L, -1) - 1;
 		lua_pop(L, 1);
 

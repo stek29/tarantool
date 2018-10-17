@@ -226,6 +226,7 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
     local opts = opts or {}
     local input_type = opts.input_type or 'buffer'
     local use_chain_io = opts.use_chain_io or false
+    local use_table_as_tuple = opts.use_table_as_tuple
 
     local tuples = {}
     local exp_result = {}
@@ -242,13 +243,17 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
         -- [1, sources_cnt]
         local guava = digest.guava(i, sources_cnt) + 1
         local tuple = schema.gen_tuple(i)
-        table.insert(tuples[guava], tuple)
         table.insert(exp_result, tuple)
+        if not use_table_as_tuple then
+            assert(input_type ~= 'buffer')
+            tuple = box.tuple.new(tuple)
+        end
+        table.insert(tuples[guava], tuple)
     end
 
-    -- Sort prepared tuples.
-    for _, ts in pairs(tuples) do
-        sort_tuples(ts, schema.parts)
+    -- Sort tuples within each source.
+    for _, source_tuples in pairs(tuples) do
+        sort_tuples(source_tuples, schema.parts)
     end
 
     -- Sort expected output.
@@ -268,37 +273,31 @@ local function prepare_data(schema, tuples_cnt, sources_cnt, opts)
         tuples = new_tuples
     end
 
-    -- Initialize N buffers; write corresponding tuples to that buffers;
-    -- that imitates netbox's select with {buffer = ...}.
-    local inputs = {}
-    for i = 1, sources_cnt do
-        inputs[i] = buffer.ibuf()
-        msgpackffi.internal.encode_r(inputs[i], {[IPROTO_DATA] = tuples[i]}, 0)
-    end
-
-    -- Replace buffers[i] with a function that gives one tuple per call.
-    if input_type == 'function' then
-        local buffers = table.copy(inputs)
+    if input_type == 'buffer' then
+        -- Imitate netbox's select with {buffer = ...}.
+        local inputs = {}
+        for i = 1, sources_cnt do
+            inputs[i] = buffer.ibuf()
+            msgpackffi.internal.encode_r(inputs[i], {[IPROTO_DATA] = tuples[i]}, 0)
+        end
+        return inputs, exp_result
+    elseif input_type == 'table' then
+        -- Imitate netbox's select w/o {buffer = ...}.
+        return tuples, exp_result
+    elseif input_type == 'function' then
+        -- Return functions that give one tuple per call.
+        local inputs = {}
         for i = 1, sources_cnt do
             local idx = 1
-            local received_tuples
             -- XXX: Maybe this func should be an iterator generator?
             inputs[i] = function()
-                if received_tuples == nil then
-                    local t = msgpackffi.decode(buffers[i].buf)
-                    received_tuples = t[IPROTO_DATA]
-                end
-                local res = received_tuples[idx]
-                if res ~= nil then
-                    res = box.tuple.new(res)
-                end
+                local res = tuples[i][idx]
                 idx = idx + 1
                 return res
             end
         end
+        return inputs, exp_result
     end
-
-    return inputs, exp_result
 end
 
 local function merger_opts_str(opts)
@@ -314,6 +313,10 @@ local function merger_opts_str(opts)
 
     if opts.output_type then
         table.insert(params, 'output_type: ' .. opts.output_type)
+    end
+
+    if opts.use_table_as_tuple then
+        table.insert(params, 'use_table_as_tuple')
     end
 
     if next(params) == nil then
@@ -349,7 +352,9 @@ local function run_merger_internal(context)
 
         -- Prepare for comparing.
         for i = 1, #res do
-            res[i] = res[i]:totable()
+            if type(res[i]) ~= 'table' then
+                res[i] = res[i]:totable()
+            end
         end
     else
         local obuf = merger_start_opts[2].buffer
@@ -467,7 +472,7 @@ local function run_case(test, schema, opts)
 end
 
 local test = tap.test('merger')
-test:plan(13 + #schemas * 6)
+test:plan(14 + #schemas * 16)
 
 -- Case: pass a field on an unknown type.
 local ok, err = pcall(merger.new, {{
@@ -574,28 +579,41 @@ local exp_err = '"output_chain_len" is mandatory when "buffer" and ' ..
     '"output_chain_first" are used'
 test:is_deeply({ok, err}, {false, exp_err}, 'start() missed output_chain_len')
 
--- Case: function input + chaining
+-- Case: function input + chaining.
 local ok, err = pcall(merger_inst.start, merger_inst, {function() end},
     {buffer = buffer.ibuf(), output_chain_first = true, output_chain_len = 1})
 local exp_err = 'Cannot use source of a function type with chained output'
 test:is_deeply({ok, err}, {false, exp_err}, 'function input is forbidded ' ..
     'with chaining')
 
+-- Case: wrong table input item.
+local ok, err = pcall(merger_inst.start, merger_inst, {{1}})
+local exp_err = 'A tuple or a table expected, got number'
+test:is_deeply({ok, err}, {false, exp_err}, 'wrong table input item')
+
 -- Remaining cases.
 for _, use_chain_io in ipairs({false, true}) do
-    for _, input_type in ipairs({'buffer', 'function'}) do
+    for _, input_type in ipairs({'buffer', 'table', 'function'}) do
         for _, output_type in ipairs({'buffer', 'function'}) do
             for _, schema in ipairs(schemas) do
-                -- One cannot use function input with chain buffer output.
+                -- One cannot use function input with chain buffer
+                -- output.
                 if input_type == 'function' and use_chain_io then
                     goto continue
                 end
-                local opts = {
-                    input_type = input_type,
-                    use_chain_io = use_chain_io,
-                    output_type = output_type,
-                }
-                run_case(test, schema, opts)
+                for _, use_table_as_tuple in ipairs({false, true}) do
+                    -- The 'use_table_as_tuple' test option has
+                    -- no sense in case of buffer sources.
+                    if input_type ~= 'buffer' or use_table_as_tuple then
+                        local opts = {
+                            input_type = input_type,
+                            use_chain_io = use_chain_io,
+                            output_type = output_type,
+                            use_table_as_tuple = use_table_as_tuple,
+                        }
+                        run_case(test, schema, opts)
+                    end
+                end
                 ::continue::
             end
         end
