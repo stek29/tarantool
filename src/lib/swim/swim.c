@@ -45,6 +45,8 @@
  * - on small updates send to another node only updates since a
  *   version. On rare updates it can dramatically reduce message
  *   size and its encoding time.
+ * - do not send self.
+ * - cache encoded batch.
  */
 
 /**
@@ -87,12 +89,18 @@ enum swim_member_status {
 	 * members table.
 	 */
 	MEMBER_ALIVE,
+	/**
+	 * The member is considered to be dead. It will disappear
+	 * from the membership, if it is not pinned.
+	 */
+	MEMBER_DEAD,
 	swim_member_status_MAX,
 };
 
 static const char *swim_member_status_strs[] = {
 	"new",
 	"alive",
+	"dead",
 };
 
 /**
@@ -105,12 +113,34 @@ static const char *swim_member_status_strs[] = {
  */
 enum swim_io_event_type {
 	SWIM_IO_BROADCAST_MEMBERS,
+	/** A ping was received. This event schedules an ack. */
+	SWIM_IO_ACK,
 };
 
 struct swim_io_event {
 	enum swim_io_event_type type;
+	/** Destination of ack. */
+	struct sockaddr_in dst;
 	struct rlist in_queue_output;
 };
+
+static struct swim_io_event *
+swim_io_event_new(enum swim_io_event_type type)
+{
+	struct swim_io_event *event =
+		(struct swim_io_event *) malloc(sizeof(*event));
+	if (event == NULL)
+		diag_set(OutOfMemory, sizeof(*event), "malloc", "event");
+	else
+		event->type = type;
+	return event;
+}
+
+static inline void
+swim_io_event_delete(struct swim_io_event *event)
+{
+	free(event);
+}
 
 /**
  * A cluster member description. This structure describes the
@@ -122,7 +152,15 @@ struct swim_member {
 	enum swim_member_status status;
 	/** Address of the instance to which send UDP packets. */
 	struct sockaddr_in addr;
+	/** Growing number to ignore old status messages. */
+	uint64_t incarnation;
+	/**
+	 * True, if the member is configured by a user and can not
+	 * disappear from the membership.
+	 */
+	bool is_pinned;
 	struct rlist in_queue_next;
+	struct rlist in_queue_wait_ack;
 };
 
 /**
@@ -134,31 +172,79 @@ struct swim_member {
  */
 enum swim_component_type {
 	SWIM_DISSEMINATION = 0,
+	SWIM_FAILURE_DETECTION,
+};
+
+/** Possible failure detection keys. */
+enum swim_fd_key {
+	/** Type of the failure detection message: ping or ack. */
+	SWIM_FD_REQUEST,
+	/**
+	 * Incarnation of the sender. To make the member alive if
+	 * it was considered to be dead, but ping/ack with greater
+	 * incarnation was received.
+	 */
+	SWIM_FD_INCARNATION,
+};
+
+/**
+ * Failure detection request now has only two types: ping or ack.
+ * But one of SWIM improvements allows to send indirect ping/ack.
+ */
+enum swim_fd_request {
+	SWIM_FD_REQUEST_PING,
+	SWIM_FD_REQUEST_ACK,
 };
 
 /** Attributes of each record of a broadcasted member table. */
 enum swim_member_key {
 	SWIM_MEMBER_STATUS = 0,
 	SWIM_MEMBER_ADDR_HASH,
+	SWIM_MEMBER_INCARNATION,
 };
 
 /**
  * SWIM message structure:
  * {
+ *     SWIM_FAILURE_DETECTION: {
+ *         SWIM_FD_REQUEST: uint, enum swim_fd_request,
+ *         SWIM_FD_INCARNATION: uint
+ *     },
  *     SWIM_DISSEMINATION: [
  *         {
  *             SWIM_MEMBER_STATUS: uint, enum member_status,
- *             SWIM_MEMBER_ADDR_HASH: uint, (ip << 16) | port
+ *             SWIM_MEMBER_ADDR_HASH: uint, (ip << 16) | port,
+ *             SWIM_MEMBER_INCARNATION: uint,
  *         },
  *         ...
  *     ],
  * }
  */
 
+/** SWIM failure detection MsgPack header template. */
+struct PACKED swim_fd_header_bin {
+	/** mp_encode_header(<15) */
+	uint8_t m_header;
+
+	/** mp_encode_uint(SWIM_FD_REQUEST) */
+	uint8_t k_request;
+	/** mp_encode(enum swim_fd_request) */
+	uint8_t v_request;
+
+	/** mp_encode_uint(SWIM_FD_INCARNATION) */
+	uint8_t k_incarnation;
+	/** mp_encode_uint(64bit incarnation) */
+	uint8_t m_incarnation;
+	uint64_t v_incarnation;
+};
+
 /** SWIM dissemination MsgPack header template. */
 struct PACKED swim_dissemination_header_bin {
 	/** mp_encode_map(1) */
 	uint8_t m_header;
+
+	/** Piggyback ping. */
+	struct swim_fd_header_bin fd;
 
 	/** mp_encode_uint(SWIM_DISSEMINATION) */
 	uint8_t k_dissemination;
@@ -182,14 +268,43 @@ struct PACKED swim_member_bin {
 	/** mp_encode_uint((ip << 16) | port) */
 	uint8_t m_addr;
 	uint64_t v_addr;
+
+	/** mp_encode_uint(SWIM_MEMBER_INCARNATION) */
+	uint8_t k_incarnation;
+	/** mp_encode_uint(64bit incarnation) */
+	uint8_t m_incarnation;
+	uint64_t v_incarnation;
 };
 
 enum {
 	/** How often to send membership messages and pings. */
 	HEARTBEAT_RATE_DEFAULT = 1,
 	UDP_PACKET_SIZE = 1472,
+	/**
+	 * If a ping was sent, it is considered to be lost after
+	 * this time.
+	 */
+	ACK_TIMEOUT = 1,
+	/**
+	 * If a member has not been responding to pings during
+	 * this time, it is considered to be dead. Note, that
+	 * during this time multiple pings could be sent:
+	 *
+	 *      N_max_pings = DEAD_TIMEOUT/ACK_TIMEOUT.
+	 */
+	DEAD_TIMEOUT = 3,
+	/**
+	 * If a not pinned member confirmed to be dead, it is
+	 * removed from the membership after this time.
+	 */
+	DEAD_GC_TIMEOUT = 2,
+	/**
+	 * Maximal number of member rows that can a dissemination
+	 * message carry. Its natural limitation is UDP packet
+	 * size.
+	 */
 	DISSEMINATION_BATCH_SIZE =
-		(UDP_PACKET_SIZE -
+		(UDP_PACKET_SIZE - sizeof(struct swim_fd_header_bin) -
 		 sizeof(struct swim_dissemination_header_bin)) /
 		sizeof(struct swim_member_bin),
 };
@@ -202,10 +317,26 @@ static struct rlist queue_next;
 /** Generator of broadcast events. */
 static struct ev_periodic broadcast_tick;
 
+/**
+ * Members waiting for an ACK. On too long absence of ACK a member
+ * is dead.
+ */
+static struct rlist queue_wait_ack;
+/** Checker of on time ACKs. */
+static struct ev_periodic wait_ack_tick;
+
 /** Event dispatcher of incomming messages. */
 static struct ev_io input;
 /** Event dispatcher of outcomming messages. */
 static struct ev_io output;
+
+/**
+ * An array of configured members. Used only to easy rollback a
+ * failed reconfiguration.
+ */
+static struct swim_member **cfg = NULL;
+/** Number of configured members. */
+static int cfg_size = 0;
 
 /**
  * An array of members shuffled on each round and used to rebuild
@@ -228,11 +359,40 @@ static struct swim_io_event broadcast_event;
 static struct rlist queue_output;
 
 static inline void
+swim_push_event(struct swim_io_event *event)
+{
+	rlist_add_tail_entry(&queue_output, event, in_queue_output);
+	ev_io_start(loop(), &output);
+}
+
+static inline void
 swim_push_broadcast_event()
 {
 	broadcast_event.type = SWIM_IO_BROADCAST_MEMBERS;
-	rlist_add_tail_entry(&queue_output, &broadcast_event, in_queue_output);
-	ev_io_start(loop(), &output);
+	swim_push_event(&broadcast_event);
+}
+
+static inline void
+swim_push_ack_event(const struct sockaddr_in *dst)
+{
+	struct swim_io_event *event = swim_io_event_new(SWIM_IO_ACK);
+	if (event == NULL)  {
+		diag_log();
+		return;
+	}
+	event->dst = *dst;
+	event->type = SWIM_IO_ACK;
+	swim_push_event(event);
+}
+
+static void
+swim_queue_output_destroy()
+{
+	struct swim_io_event *event, *tmp;
+	rlist_foreach_entry_safe(event, &queue_output, in_queue_output, tmp) {
+		if (event != &broadcast_event)
+			swim_io_event_delete(event);
+	}
 }
 
 /**
@@ -240,7 +400,8 @@ swim_push_broadcast_event()
  * added to the hash, to the 'next' queue.
  */
 static struct swim_member *
-swim_member_new(struct sockaddr_in *addr, enum swim_member_status status)
+swim_member_new(struct sockaddr_in *addr, enum swim_member_status status,
+		uint64_t incarnation)
 {
 	struct swim_member *member =
 		(struct swim_member *) malloc(sizeof(*member));
@@ -250,6 +411,8 @@ swim_member_new(struct sockaddr_in *addr, enum swim_member_status status)
 	}
 	member->status = status;
 	member->addr = *addr;
+	member->incarnation;
+	member->is_pinned = false;
 	struct mh_i64ptr_node_t node;
 	node.key = sockaddr_in_hash(addr);
 	node.val = member;
@@ -260,6 +423,7 @@ swim_member_new(struct sockaddr_in *addr, enum swim_member_status status)
 		return NULL;
 	}
 	rlist_add_entry(&queue_next, member, in_queue_next);
+	rlist_create(&member->in_queue_wait_ack);
 	return member;
 }
 
@@ -284,6 +448,7 @@ swim_member_delete(struct swim_member *member)
 	assert(rc != mh_end(members));
 	mh_i64ptr_del(members, rc, NULL);
 	rlist_del_entry(member, in_queue_next);
+	rlist_del_entry(member, in_queue_wait_ack);
 	free(member);
 }
 
@@ -329,8 +494,9 @@ swim_new_round()
 }
 
 static int
-swim_encode_dissemination_msg(char *buffer)
+swim_encode_dissemination_msg(char *buffer, int size)
 {
+	(void) size;
 	char *start = buffer;
 	if ((shuffled_members == NULL || rlist_empty(&queue_next)) &&
 	    swim_new_round() != 0)
@@ -339,10 +505,20 @@ swim_encode_dissemination_msg(char *buffer)
 	struct swim_dissemination_header_bin header_bin;
 	int batch_size = MIN(DISSEMINATION_BATCH_SIZE, shuffled_members_size);
 	header_bin.m_header = 0x81;
+	header_bin.m_header = 0x82;
+
+	header_bin.fd.m_header = 0x82;
+	header_bin.fd.k_request = SWIM_FD_REQUEST;
+	header_bin.fd.v_request = SWIM_FD_REQUEST_PING;
+
+	header_bin.fd.k_incarnation = SWIM_FD_INCARNATION;
+	header_bin.fd.m_incarnation = 0xcf;
+	header_bin.fd.v_incarnation = mp_bswap_u64(self->incarnation);
 
 	header_bin.k_dissemination = SWIM_DISSEMINATION;
 	header_bin.m_dissemination = 0xdd;
 	header_bin.v_dissemination = mp_bswap_u32(batch_size);
+	assert(buffer + sizeof(header_bin) - start <= size);
 	memcpy(buffer, &header_bin, sizeof(header_bin));
 	buffer += sizeof(header_bin);
 
@@ -356,6 +532,7 @@ swim_encode_dissemination_msg(char *buffer)
 		member_bin.v_status = member->status;
 		member_bin.v_addr =
 			mp_bswap_u64(sockaddr_in_hash(&member->addr));
+		assert(buffer + sizeof(member_bin) - start <= size);
 		memcpy(buffer, &member_bin, sizeof(member_bin));
 		buffer += sizeof(member_bin);
 	}
@@ -371,7 +548,7 @@ static void
 swim_send_dissemination_msg()
 {
 	char buffer[UDP_PACKET_SIZE];
-	int size = swim_encode_dissemination_msg(buffer);
+	int size = swim_encode_dissemination_msg(buffer, UDP_PACKET_SIZE);
 	if (size < 0) {
 		diag_log();
 		return;
@@ -384,8 +561,31 @@ swim_send_dissemination_msg()
 	if (sio_sendto(output.fd, buffer, size, 0, (struct sockaddr *) &m->addr,
 		       sizeof(m->addr)) == -1)
 		diag_log();
+	if (rlist_empty(&m->in_queue_wait_ack))
+		rlist_add_tail_entry(&queue_wait_ack, m, in_queue_wait_ack);
 	rlist_del_entry(m, in_queue_next);
 	ev_periodic_start(loop(), &broadcast_tick);
+}
+
+static void
+swim_send_ack(struct sockaddr_in *dst)
+{
+	struct swim_fd_header_bin header_bin;
+	header_bin.m_header = 0x82;
+
+	header_bin.k_request = SWIM_FD_REQUEST;
+	header_bin.v_request = SWIM_FD_REQUEST_ACK;
+
+	header_bin.k_incarnation = SWIM_FD_INCARNATION;
+	header_bin.m_incarnation = 0xcf;
+	header_bin.v_incarnation = mp_bswap_u64(self->incarnation);
+
+	assert(sizeof(header_bin) <= UDP_PACKET_SIZE);
+	say_info("send ack to %s", sio_strfaddr((struct sockaddr *) dst,
+						sizeof(*dst)));
+	if (sio_sendto(output.fd, &header_bin, sizeof(header_bin),
+		       (struct sockaddr *) dst, sizeof(*dst)) != 0)
+		diag_log();
 }
 
 static void
@@ -400,8 +600,13 @@ swim_on_output(struct ev_loop *loop, struct ev_io *io, int events)
 	struct swim_io_event *event =
 		rlist_shift_entry(&queue_output, struct swim_io_event,
 				  in_queue_output);
-	assert(event->type == SWIM_IO_BROADCAST_MEMBERS);
-	swim_send_dissemination_msg();
+	if (event->type == SWIM_IO_BROADCAST_MEMBERS) {
+		swim_send_dissemination_msg();
+	} else {
+		assert(event->type == SWIM_IO_ACK);
+		swim_send_ack(&event->dst);
+		swim_io_event_delete(event);
+	}
 	if (rlist_empty(&queue_output)) {
 		ev_io_stop(loop, io);
 		return;
@@ -492,6 +697,72 @@ swim_process_dissemination(const char **pos)
 	return 0;
 }
 
+static int
+swim_process_failure_detection(const char **pos,
+			       const struct sockaddr_in *sender)
+{
+	if (mp_typeof(**pos) != MP_MAP) {
+		say_error("Invalid SWIM message: failure detection should be "\
+			  "a map");
+		return -1;
+	}
+	uint64_t size = mp_decode_map(pos);
+	if (size != 2) {
+		say_error("Invalid SWIM message: failure detection should "\
+			  "have two keys - request type and incarnation");
+		return -1;
+	}
+	struct swim_member *m = swim_find_member(sockaddr_in_hash(sender));
+	if (m == NULL)
+		m = swim_member_new(sender, MEMBER_ALIVE);
+	for (int i = 0; i < (int) size; ++i) {
+		if (mp_typeof(**pos) != MP_UINT) {
+			say_error("Invalid SWIM message: failure detection "\
+				  "key should be uint");
+			return -1;
+		}
+		uint64_t key = mp_decode_uint(pos);
+		switch(key) {
+		case SWIM_FD_REQUEST:
+			if (mp_typeof(**pos) != MP_UINT) {
+				say_error("Invalid SWIM message: failure "\
+					  "detection request should be uint");
+				return -1;
+			}
+			key = mp_decode_uint(pos);
+			switch(key) {
+			case SWIM_FD_REQUEST_PING:
+				swim_push_ack_event(sender);
+				break;
+			case SWIM_FD_REQUEST_ACK:
+				/** Process ack here. */
+				break;
+			default:
+				say_error("Invalid SWIM message: unknown "\
+					  "failure detection request");
+				return -1;
+			}
+			break;
+		case SWIM_FD_INCARNATION:
+			if (mp_typeof(**pos) != MP_UINT) {
+				say_error("Invalid SWIM message: failure "\
+					  "detection incarnation should be "\
+					  "uint");
+				return -1;
+			}
+			key = mp_decode_uint(pos);
+			if (m != NULL && m->incarnation < key)
+				m->incarnation = key;
+			break;
+		default:
+			say_error("Invalid SWIM message: unknown failure "\
+				  "detection key");
+			return -1;
+		}
+	}
+	return 0;
+}
+
 /** Receive and process a new message. */
 static void
 swim_on_input(struct ev_loop *loop, struct ev_io *io, int events)
@@ -521,13 +792,18 @@ swim_on_input(struct ev_loop *loop, struct ev_io *io, int events)
 				  "contain uint keys");
 			return;
 		}
-		if (mp_decode_uint(&pos) != SWIM_DISSEMINATION) {
-			say_error("Invalid SWIM message: only dissemination "\
-				  "component is supported");
+		uint64_t key = mp_decode_uint(&pos);
+		if (key == SWIM_DISSEMINATION) {
+			if (swim_process_dissemination(&pos) != 0)
+				return;
+		} else if (key == SWIM_FAILURE_DETECTION) {
+			if (swim_process_failure_detection(&pos) != 0)
+				return;
+		} else {
+			say_error("Invalid SWIM message: unknown component "\
+				  "type component is supported");
 			return;
 		}
-		if (swim_process_dissemination(&pos) != 0)
-			return;
 	}
 }
 
@@ -577,8 +853,10 @@ swim_init()
 	ev_init(&input, swim_on_input);
 	ev_init(&output, swim_on_output);
 	ev_init(&broadcast_tick, swim_trigger_broadcast);
+	ev_init(&wait_ack_tick, swim_check_acks);
 	ev_periodic_set(&broadcast_tick, 0, HEARTBEAT_RATE_DEFAULT, NULL);
 	rlist_create(&queue_next);
+	rlist_create(&queue_wait_ack);
 	rlist_create(&queue_output);
 	return 0;
 }
@@ -652,9 +930,15 @@ swim_cfg(const char **member_uris, int member_uri_count, const char *server_uri,
 		ev_periodic_set(&broadcast_tick, 0, heartbeat_rate, NULL);
 
 	if (member_uri_count > 0) {
-		for (int i = 0; i < new_cfg_size; ++i)
+		for (int i = 0; i < cfg_size; ++i)
+			cfg[i]->is_pinned = false;
+		free(cfg);
+		for (int i = 0; i < new_cfg_size; ++i) {
+			new_cfg[i]->is_pinned = true;
 			new_cfg[i]->status = MEMBER_ALIVE;
-		free(new_cfg);
+		}
+		cfg = new_cfg;
+		cfg_size = new_cfg_size;
 	}
 	if (new_self->status == MEMBER_NEW)
 		new_self->status = MEMBER_ALIVE;
