@@ -89,11 +89,21 @@ sio_add_to_iov(struct iovec *iov, size_t size)
 	iov->iov_base = (char *) iov->iov_base - size;
 }
 
+ssize_t sio_sendto(int fd, const void *buf, size_t len, int flags,
+		   const struct sockaddr *dest_addr, socklen_t addrlen);
+
+ssize_t sio_recvfrom(int fd, void *buf, size_t len, int flags,
+		     struct sockaddr *src_addr, socklen_t *addrlen);
+
+const char *sio_socketname(int fd);
+
+int sio_socket(int domain, int type, int protocol);
+
+int sio_bind(int fd, struct sockaddr *addr, socklen_t addrlen);
+
 #if defined(__cplusplus)
 } /* extern "C" */
 
-const char *sio_socketname(int fd);
-int sio_socket(int domain, int type, int protocol);
 
 int sio_shutdown(int fd, int how);
 
@@ -108,7 +118,6 @@ sio_getsockopt(int fd, int level, int optname,
 	       void *optval, socklen_t *optlen);
 
 int sio_connect(int fd, struct sockaddr *addr, socklen_t addrlen);
-int sio_bind(int fd, struct sockaddr *addr, socklen_t addrlen);
 int sio_listen(int fd);
 int sio_listen_backlog();
 int sio_accept(int fd, struct sockaddr *addr, socklen_t *addrlen);
@@ -167,13 +176,6 @@ sio_sendfile(int sock_fd, int file_fd, off_t *offset, size_t size);
  */
 ssize_t
 sio_recvfile(int sock_fd, int file_fd, off_t *offset, size_t size);
-
-
-ssize_t sio_sendto(int fd, const void *buf, size_t len, int flags,
-		   const struct sockaddr *dest_addr, socklen_t addrlen);
-
-ssize_t sio_recvfrom(int fd, void *buf, size_t len, int flags,
-		     struct sockaddr *src_addr, socklen_t *addrlen);
 
 #endif /* defined(__cplusplus) */
 

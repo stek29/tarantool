@@ -1,7 +1,7 @@
-#ifndef INCLUDES_TARANTOOL_BOX_INFO_H
-#define INCLUDES_TARANTOOL_BOX_INFO_H
+#ifndef INCLUDES_TARANTOOL_INFO_H
+#define INCLUDES_TARANTOOL_INFO_H
 /*
- * Copyright 2010-2017, Tarantool AUTHORS, please see AUTHORS file.
+ * Copyright 2010-2018, Tarantool AUTHORS, please see AUTHORS file.
  *
  * Redistribution and use in source and binary forms, with or
  * without modification, are permitted provided that the following
@@ -35,9 +35,10 @@
 
 /**
  * @file
- * This module provides an adapter for Lua/C API to generate box.info()
- * and index:info() introspection trees. The primary purpose of this
- * adapter is to eliminate Engine <-> Lua interdependency.
+ * This module provides an adapter for Lua/C API to generate
+ * box.info() and index:info() introspection trees. The primary
+ * purpose of this adapter is to eliminate Engine <-> Lua
+ * interdependency.
  *
  * TREE STRUCTURE
  *
@@ -57,20 +58,18 @@
  *
  * IMPLEMENTATION DETAILS
  *
- * Current implementation calls Lua/C API under the hood without any
- * pcall() wrapping. As you may now, idiosyncratic Lua/C API unwinds
- * C stacks on errors in a way you can't handle in C. Please ensure that
- * all blocks of code which call info_append_XXX() functions are
- * exception/longjmp safe.
+ * Current implementation calls Lua/C API under the hood without
+ * any pcall() wrapping. As you may now, idiosyncratic Lua/C API
+ * unwinds C stacks on errors in a way you can't handle in C.
+ * Please ensure that all blocks of code which call
+ * info_append_XXX() functions are exception/longjmp safe.
  */
 
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
 
-/**
- * Virtual method table for struct info_handler.
- */
+/** Virtual method table for struct info_handler. */
 struct info_handler_vtab {
 	/** The begin of document. */
 	void (*begin)(struct info_handler *);
@@ -92,7 +91,8 @@ struct info_handler_vtab {
 };
 
 /**
- * Adapter for Lua/C API to generate box.info() sections from engines.
+ * Adapter for Lua/C API to generate box.info() sections from
+ * engines.
  */
 struct info_handler {
 	struct info_handler_vtab *vtab;
@@ -103,7 +103,6 @@ struct info_handler {
 /**
  * Starts a new document and creates root-level associative array.
  * @param info box.info() adapter.
- * @throws C++ exception on OOM, see info.h comments.
  * @pre must be called once before any other functions.
  */
 static inline void
@@ -115,7 +114,6 @@ info_begin(struct info_handler *info)
 /**
  * Finishes the document and closes root-level associative array.
  * @param info box.info() adapter.
- * @throws C++ exception on OOM, see info.h comments.
  * @pre must be called at the end.
  */
 static inline void
@@ -129,7 +127,6 @@ info_end(struct info_handler *info)
  * @param info box.info() adapter.
  * @param key key.
  * @param value value.
- * @throws C++ exception on OOM, see info.h comments.
  * @pre associative array is started.
  */
 static inline void
@@ -144,11 +141,10 @@ info_append_int(struct info_handler *info, const char *key, int64_t value)
  * @param info box.info() adapter.
  * @param key key.
  * @param value value.
- * @throws C++ exception on OOM, see info.h comments.
  */
 static inline void
 info_append_str(struct info_handler *info, const char *key,
-		   const char *value)
+		const char *value)
 {
 	return info->vtab->append_str(info, key, value);
 }
@@ -159,7 +155,6 @@ info_append_str(struct info_handler *info, const char *key,
  * @param info box.info() adapter.
  * @param key key.
  * @param value value.
- * @throws C++ exception on OOM, see info.h comments.
  */
 static inline void
 info_append_double(struct info_handler *info, const char *key,
@@ -168,11 +163,10 @@ info_append_double(struct info_handler *info, const char *key,
 	return info->vtab->append_double(info, key, value);
 }
 
-/*
+/**
  * Associates a new associative array with @a key.
  * @param info box.info() adapter.
  * @param key key.
- * @throws C++ exception on OOM, see info.h comments.
  */
 static inline void
 info_table_begin(struct info_handler *info, const char *key)
@@ -180,10 +174,9 @@ info_table_begin(struct info_handler *info, const char *key)
 	return info->vtab->begin_table(info, key);
 }
 
-/*
+/**
  * Finishes the current active associative array.
  * @param info box.info() adapter
- * @throws C++ exception on OOM, see info.h comments.
  */
 static inline void
 info_table_end(struct info_handler *info)
@@ -195,4 +188,4 @@ info_table_end(struct info_handler *info)
 } /* extern "C" */
 #endif /* defined(__cplusplus) */
 
-#endif /* INCLUDES_TARANTOOL_BOX_INFO_H */
+#endif /* INCLUDES_TARANTOOL_INFO_H */
